@@ -72,6 +72,7 @@ class Splitter:
         chunk_border: int = 2,
         frame_folder: str = None,
         orig_frame_folder: str = None,
+        auto_cleanup_frames: bool = True,
     ) -> None:
         super().__init__()
 
@@ -86,9 +87,10 @@ class Splitter:
         self.orig_chunk_folder = orig_chunk_folder
         self.done_cache = done_cache
         
-        # Frame folders for cleanup (optional)
-        self.frame_folder = frame_folder
-        self.orig_frame_folder = orig_frame_folder
+        # Frame folders for cleanup
+        self.frame_folder = frame_folder or "videos/frames"
+        self.orig_frame_folder = orig_frame_folder or "videos/orig_frames"
+        self.auto_cleanup_frames = auto_cleanup_frames
 
     def load_intra_frames(self, metadata: Metadata, dirname: str) -> List[int]:
         # Look for decode.log in the directory
@@ -168,8 +170,9 @@ class Splitter:
 
             self.save_chunks(video_chunks, dirname)
             
-            # Clean up frames folder after chunks are created
-            self.cleanup_frames(metadata)
+            # Automatically clean up frames folder after chunks are created
+            if self.auto_cleanup_frames:
+                self.cleanup_frames(metadata)
             
             with open(self.done_cache, "a") as f:
                 f.write(f"\n{dirname}")
@@ -323,31 +326,45 @@ class Splitter:
         """
         import shutil
         
-        if not self.frame_folder and not self.orig_frame_folder:
-            return  # No cleanup if frame folders not specified
+        print(f"🧹 Cleaning up frames for {metadata.file}...")
         
         # Pattern for frames: videos/frames/{file}__{height}__{width}/{profile}_QP{qp}_ALF{alf}_DB{db}_SAO{sao}/
         frame_dir_pattern = f"{metadata.file}__{metadata.height}__{metadata.width}"
         
         # Cleanup main frames
-        if self.frame_folder:
-            frame_dir_path = os.path.join(self.frame_folder, frame_dir_pattern)
-            if os.path.exists(frame_dir_path):
-                try:
-                    shutil.rmtree(frame_dir_path)
-                    print(f"Cleaned up frames directory: {frame_dir_path}")
-                except Exception as e:
-                    print(f"Warning: Could not cleanup frames directory {frame_dir_path}: {e}")
+        frame_dir_path = os.path.join(self.frame_folder, frame_dir_pattern)
+        if os.path.exists(frame_dir_path):
+            try:
+                shutil.rmtree(frame_dir_path)
+                print(f"✅ Cleaned up frames directory: {frame_dir_path}")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not cleanup frames directory {frame_dir_path}: {e}")
         
         # Cleanup orig_frames
-        if self.orig_frame_folder:
-            orig_frame_dir_path = os.path.join(self.orig_frame_folder, metadata.file)
-            if os.path.exists(orig_frame_dir_path):
-                try:
-                    shutil.rmtree(orig_frame_dir_path)
-                    print(f"Cleaned up orig frames directory: {orig_frame_dir_path}")
-                except Exception as e:
-                    print(f"Warning: Could not cleanup orig frames directory {orig_frame_dir_path}: {e}")
+        orig_frame_dir_path = os.path.join(self.orig_frame_folder, metadata.file)
+        if os.path.exists(orig_frame_dir_path):
+            try:
+                shutil.rmtree(orig_frame_dir_path)
+                print(f"✅ Cleaned up orig frames directory: {orig_frame_dir_path}")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not cleanup orig frames directory {orig_frame_dir_path}: {e}")
+
+        # Also try to remove empty parent directories
+        try:
+            # Remove empty frame_folder if it's empty
+            if os.path.exists(self.frame_folder) and not os.listdir(self.frame_folder):
+                os.rmdir(self.frame_folder)
+                print(f"✅ Removed empty frames folder: {self.frame_folder}")
+        except:
+            pass  # Ignore if not empty or other errors
+            
+        try:
+            # Remove empty orig_frame_folder if it's empty  
+            if os.path.exists(self.orig_frame_folder) and not os.listdir(self.orig_frame_folder):
+                os.rmdir(self.orig_frame_folder)
+                print(f"✅ Removed empty orig frames folder: {self.orig_frame_folder}")
+        except:
+            pass  # Ignore if not empty or other errors
 
 
 if __name__ == "__main__":
@@ -357,7 +374,7 @@ if __name__ == "__main__":
     
     # Basic required arguments: data_path, encoded_path, chunk_folder, orig_chunk_folder, done_cache
     if len(args) < 5:
-        print("Usage: python split_to_chunks.py data_path encoded_path chunk_folder orig_chunk_folder done_cache [chunk_width] [chunk_height] [chunk_border] [frame_folder] [orig_frame_folder]")
+        print("Usage: python split_to_chunks.py data_path encoded_path chunk_folder orig_chunk_folder done_cache [chunk_width] [chunk_height] [chunk_border] [frame_folder] [orig_frame_folder] [auto_cleanup]")
         sys.exit(1)
     
     # Convert optional numeric arguments to int
