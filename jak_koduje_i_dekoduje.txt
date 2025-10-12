@@ -1,0 +1,59 @@
+create_encode_tasks.py - robi plik TASKS_ENC
+python bin/create_encode_tasks.py TASKS_ENC videos/data videos/encoded
+
+
+pool work robi komendy pliku wynikowego create_encode_tasks - tam są wywołania skryptu encode_data.sh
+
+to samo z create_decode_tasks.py - robi plik TASKS_DEC
+python3 bin/create_decode_tasks.py TASKS_DEC videos/encoded videos/decoded
+
+komenda pool work:
+
+python3 bin/pool_work.py TASKS_DEC done_dec undone_dec --cpu-count 8
+
+
+struktura folderów:
+
+./videos/data - zawiera pierwotne yuv i ich info
+
+./videos/encoded - zakodowane
+
+./videos/decoded - zdekodowane
+
+zrobiłem też link 
+ln -s videos/data data
+
+bo
+To komunikat z pool_work.py znaczy, że skrypt oczekuje katalogu ./data w bieżącym katalogu (a Ty masz videos/data). Przez to nie uruchomił żadnego zadania.
+
+
+koduję z głębią bitową: 8
+
+
+Zdecydowaliśmy się na 8 bitów głównie z trzech powodów:
+
+Zgodność z datasetem – większość popularnych baz testowych (np. Xiph, UVG, Vimeo, które Piotr też używał) jest w formacie YUV420 8-bit. Nie trzeba robić konwersji do 10-bit, co mogłoby wprowadzać dodatkowe artefakty.
+
+Prostsze przetwarzanie i mniejsze pliki – 8-bitowe YUV zajmuje ~25% mniej miejsca niż 10-bit, a trening i obróbka danych (numpy, PyTorch) jest prostsza i szybsza, bo wszystko mieści się w uint8.
+
+Porównywalność z pracą Piotra – on trenował na 8-bitowych sekwencjach, więc zostając przy 8 bitach mamy pełną kompatybilność i możemy bez problemu porównać wyniki.
+
+📌 10-bit byłby ciekawy przy pracy nad profesjonalnym HDR albo broadcast-quality materiałem, ale to by:
+
+zwiększyło wymagania na dataset,
+
+spowodowało problemy z odczytem plików (np. OpenCV, matplotlib słabo wspierają 10-bit),
+
+i wydłużyło trening.
+
+Dlatego 8-bit = rozsądny wybór na start.
+
+
+UWAGA:
+
+mam dane i skupię się na sieci ALE!
+trzeba będzie je jeszcze raz przekodować tak jak poprzednio zmieniając skrypt encode_data.sh
+bo teraz na przykład SAO0 ma SAO1 w logu. Chat mówi, że to kwestia przeniesienia opcji:
+preset medium na start po wywołaniu komendy bo teraz jest na końcu. Nie wiem czy to to ale jak sieć będzie się uczyć to trzeba jeszcze raz przekodować dane i sprawdzić. 
+
+

@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+.venv/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# PyTorch Lightning
+lightning_logs/
+checkpoints/
+
+# Data files
+*.yuv
+*.y4m
+*.bin
+*.vvc
+*.rec
+videos/data/
+videos/encoded/
+videos/decoded/
+videos/frames/
+videos/orig_frames/
+videos/chunks/
+videos/orig_chunks/
+enhanced/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache files
+done_*
+*.log
+*.cache
+
+# Large model files
+*.pth
+*.pkl
+*.model
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Specific to your project
+VTM/build/
+VVCSoftware_VTM/build/
+vvdec/build/
+vvenc/build/
+VTM/bin/
+VVCSoftware_VTM/bin/
+
+# NPZ files (can be large)
+*.npz
+
+# Task files
+TASKS_*

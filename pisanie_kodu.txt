@@ -1,0 +1,30 @@
+Pierwszy krok to napisanie modułu parsującego CSV i NPZ (żeby do każdej klatki móc dopasować statystyki + współczynniki).
+(dataset.py)
+
+Co działa już teraz
+
+train/val: dalej bierze 3 tensory: chunk, orig_chunk, meta(6×1×1) + tuple do zapisu.
+
+test/predict: dostajesz dodatkowo aux (dict) z block_stats i dequant. Przy test_full_frames=True batch=1, więc DataLoader łyka to bez customowego collate_fn.
+
+
+
+Jak włączyć nowe dane do treningu (minimalny plan)
+
+Zbudować mapy cech na siatce pikseli (np. depth_map, qp_map, cbf_map) z listy block_stats – to musi mieć stały wymiar zgodny z wejściem modelu (np. H×W dla całej ramki, albo pocięte na chunki 132×132).
+
+proste: inicjalizujesz macierz zer i wypełniasz wartościami na prostokątach (x,y,w,h).
+
+Rozszerzyć VVCDataset (treningowy) o te mapy:
+
+w __getitem__ po zczytaniu chunku wytnij z map H×W odpowiadający patchowi (x:x+132, y:y+132),
+
+sklej to jako dodatkowe kanały wejściowe (np. 3 kolory + K map = 3+K kanałów), albo jako dodatkowe skalarne metadane (zwiększyć metadata_size).
+
+Mikro-update modelu:
+
+jeśli doklejasz kanały obrazowe: pierwsza warstwa konwolucji powinna mieć in_channels = 3 + K.
+
+jeśli doklejasz skalary do metadanych: w EnhancerConfig.metadata_size zwiększ z 6 do 6+M, a w bloku, który przetwarza metadane (w enhancer.py), odpowiednio dopasuj liniowe wejście (zwykle wystarczy zmienić wymiar).
+
+ogarnąć kanały danych: preprocessing csv oraz dequant maps per POC (pamiętaj o tym, że na poziomie robienia png musisz wiedzieć jaki to POC)

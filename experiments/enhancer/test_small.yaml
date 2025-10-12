@@ -1,0 +1,72 @@
+test_full_frames: true
+trainer:
+  mode: enhancer
+  enhancer:
+    epochs: 10  # Krótko dla testu
+    enhancer_scheduler_gamma: 0.5
+    enhancer_scheduler_milestones: [5]
+    saved_chunk_folder: enhanced/test_small
+enhancer:
+  implementation: conv
+  save_to: 'experiments/enhancer/test_small.pth'
+  features:
+    kernel_size: 9
+    padding: 4
+    stride: 1
+    features: 64
+    pool: false
+  structure:
+    blocks:
+      - kernel_size: 7
+        padding: 3
+        stride: 1
+        features: 64
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        features: 96
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 64
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 48
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 32
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    features: 3
+    tanh: false
+
+# Konfiguracja datasetu
+dataloader:
+  n_step: 50  # Małe kroki dla testu
+  val_n_step: 5
+  batch_size: 4  # Mały batch dla testu
+  val_batch_size: 4
+
+dataset:
+  train:
+    chunk_folder: videos/chunks  # Puste ale potrzebne
+    orig_chunk_folder: videos/orig_chunks  # Puste ale potrzebne
+    chunk_height: 132
+    chunk_width: 132
+  val:
+    chunk_folder: videos/chunks
+    orig_chunk_folder: videos/orig_chunks  
+    chunk_height: 132
+    chunk_width: 132
+  test:
+    chunk_folder: videos/chunks
+    orig_chunk_folder: videos/orig_chunks
+    chunk_height: 132  
+    chunk_width: 132
+
+# Ścieżka do map VVC
+fused_maps_dir: videos/decoded

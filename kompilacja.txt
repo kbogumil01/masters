@@ -1,0 +1,20 @@
+# w katalogu źródeł VTM
+rm -rf build
+mkdir build && cd build
+
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DENABLE_TRACING=1 \                     # wymagane dla block stats
+  -DK0149_BLOCK_STATISTICS=1 \             # wymagane dla block stats
+  -DBLOCK_STATS_AS_CSV=1 \                 # CSV zamiast formatu “human”
+  -DDUMP_DEQUANT_COEFFS=1                  # nasz patch – zapis dequant
+
+make -j"$(nproc)"
+
+
+
+bin/DecoderAppStatic \
+  -b INPUT.bit \
+  -o rec.yuv \
+  --TraceFile="block_stats.csv" \
+  --TraceRule="D_BLOCK_STATISTICS_CODED:poc>=0"

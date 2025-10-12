@@ -1,0 +1,47 @@
+trainer:
+  mode: discriminator
+  discriminator:
+    epochs: 50
+    discriminator_lr: 0.001
+    discriminator_scheduler_milestones: [10, 20, 30, 40]
+discriminator:
+  implementation: dense
+  save_to: 'experiments/discriminator/dense.pth'
+  bn_size: 2
+  features:
+    kernel_size: 7
+    padding: 3
+    stride: 2
+    features: 32
+    pool: true
+    dense: false
+  structure:
+    blocks:
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 8
+        num_layers: 3
+        transition:
+          mode: down
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 8
+        num_layers: 6
+        transition:
+          mode: down
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 8
+        num_layers: 12
+        transition:
+          mode: down
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 8
+        num_layers: 1
+  classifier:
+    features: 1

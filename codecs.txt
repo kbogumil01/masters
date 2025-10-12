@@ -1,0 +1,200 @@
+użyję vvenc do kodowania i VTM do dekodowania i wysnucia wszystkich parametrów
+
+użycie:
+
+PATH:
+declare -x PATH="/home/karol/mgr/new_PC/vvenc/bin/release-static:/home/karol/mgr/new_PC/vvenc/bin/release-static:/home/karol/.vscode-server/bin/488a1f239235055e34e673291fb8d8c810886f81/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/lib/wsl/lib:/mnt/c/WINDOWS/system32:/mnt/c/WINDOWS:/mnt/c/WINDOWS/System32/Wbem:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/:/mnt/c/WINDOWS/System32/OpenSSH/:/mnt/c/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR:/mnt/c/Program Files (x86)/NVIDIA Corporation/PhysX/Common:/mnt/c/Users/Karol/AppData/Local/Microsoft/WindowsApps:/mnt/c/Users/Karol/AppData/Local/Programs/Microsoft VS Code/bin:/snap/bin:/home/karol/.vscode-server/data/User/globalStorage/github.copilot-chat/debugCommand"
+
+enkoder:
+vvencapp -i ./videos/data/input.yuv  -s 1280x720 -r 50 -o ./videos/encoded/out.vvc
+
+enkoder VTM:
+./VTM/bin/EncoderAppStatic -c ./VTM/cfg/encoder_intra_vtm.cfg -i ./videos/data/input.yuv -b ./videos/encoded/VTM_test.vvc -o ./videos/encoded/recon_VTM.yuv --SourceWidth=1280 --SourceHeight=720 --FrameRate=50 --QP=32 --FramesToBeEncoded=64
+
+dekoder VTM:
+./VTM/bin/DecoderAppStatic -b ./videos/encoded/out.vvc -o ./videos/decoded/input_test_decoded.yuv
+
+dekoder VTM z flagami do statystyk:
+./VTM/bin/DecoderAppStatic -b ./videos/encoded/out.vvc -o ./videos/decoded/input_test_decoded.yuv \
+--TraceFile="./videos/decoded/test.vtmbmsstats" \
+--TraceRule="D_BLOCK_STATISTICS_CODED:poc>=0"
+
+vvdec:
+karol@DESKTOP-PHMBQ6U:~/mgr/new_PC/vvdec$ export PATH=$PWD/bin/release-static:$PATH
+vvdecapp -b ./videos/encoded/out.vvc -o ./videos/decoded/test_vvdec.yuv 
+
+ffplay -video_size 1280x720 -framerate 50 -pixel_format yuv420p data/input.yuv
+
+
+ffplay -video_size 1280x720 -framerate 50 -pixel_format yuv420p10le videos/decoded/test_vvdec.yuv - to działa git!!!!!!
+
+vvenc – domyślnie produkuje strumień Main10 (10 bitów).
+vvdec / VTM – wypisują plik YUV w 16-bit LE (10 bitów
+zapakowanych w 16).
+ffplay -yuv420p zakłada, że każda próba to 8 bitów → odczytuje tylko
+niższy bajt każdej pary, gubi chromę, stąd zielone smugi.
+
+
+
+oba dekodery działają tak samo, czyli słabo bo jest zielony migający obrazek. Jest problem z jakimś parametrem. albo formatem
+
+zadanie: skompiluj VTM dekoder żeby dawał każde pożądane info 
+: trzeba będzie dodać ten shit z współczynnikami
+
+O co cho z współczynnikami:
+współczynniki opisują zawartość obrazu
+
+zdekwantowane to te po DCT (albo innej metodzie) czyli już te zaokrąglone 
+
+czyli muszę mieć współczynniki przypisane do każdego bloku 
+
+Blok pikseli → Kodek bierze np. blok 16×16 próbek resztkowych (różnicy między predykcją a oryginałem).
+
+
+
+
+VTM coś wypluł!!!!!
+
+karol@DESKTOP-PHMBQ6U:~/mgr/new_PC/videos/decoded$ ../../VVCSoftware_VTM/bin/DecoderAppStatic   -b ../encoded/out.vvc   -o recon.yuv   -d 8   --TraceFile=block_stats.csv   --TraceRule="D_BLOCK_STATISTICS_ALL:poc>=0"
+
+-d 8 – jeśli materiał jest 8-bit (typowe dla vvencapp). Dla 10-bit użyj -d 10. - chat 2025
+
+czym są poc?
+
+picture order count - nie wszyskie poc mają dekwantyzację! to jest spoko 
+
+CBF w kontekście VVC (i wcześniejszych standardów jak HEVC, AVC) to skrót od Coded Block Flag.
+Jest to flaga, która mówi, czy w danym bloku (dla danego komponentu — Y, Cb, Cr) są niezerowe współczynniki transformaty po kwantyzacji.
+Jeśli CBF = 1 → blok ma jakieś współczynniki ≠ 0 → trzeba go dekwantyzować i rekonstruować resztę.
+
+Jeśli CBF = 0 → wszystkie współczynniki są zerowe → oznacza to, że predykcja (intra lub inter) była tak dobra, że reszta = 0 → nie ma tu nic do dekwantyzowania (dlatego w Twoim dumpie brak pliku dla POC, jeśli w całej klatce wszystkie CBF=0).
+
+
+
+PLAN:
+
+
+1️⃣ Analiza obecnego rozwiązania Piotra
+Cel: zrozumieć, jak dane idą od surowego wideo do wejścia sieci.
+
+Źródła danych:
+Piotr używał vvenc/vvdec do kodowania i dekodowania → zapisywał zdekodowane YUV oraz CSV z Block Statistics.
+
+Format wejściowy do sieci:
+Dataset ładował zakodowane–zdekodowane bloki (chunks), oryginalne bloki (orig_chunks) i opcjonalne metadane (raczej ubogie).
+
+Brakujące elementy:
+brak map CTU/CU, brak QP per blok, brak flag filtrów (SAO, ALF), brak trybów predykcji, brak zdekwantowanych współczynników.
+
+2️⃣ Projekt nowego pipeline danych
+Będziemy potrzebowali dwóch głównych źródeł danych:
+
+block_stats.csv z VTM (z opcją ENABLE_TRACING, K0149_BLOCK_STATISTICS, BLOCK_STATS_AS_CSV=1):
+
+głębokość (Depth, QT_Depth, BT_Depth, MT_Depth),
+
+QP (QP, QP_Chroma),
+
+tryby predykcji (PredMode, Luma_IntraMode, Chroma_IntraMode),
+
+flagi filtrów (SAO, ALF – musimy potwierdzić, gdzie dokładnie są w CSV),
+
+inne przydatne flagi (SkipFlag, RootCbf, Cbf_Y/Cb/Cr).
+
+Zdekwantowane współczynniki z VTM:
+
+wyciągnięte z naszego zmodyfikowanego TrQuant::xDeQuant w postaci .bin + .csv z metadanymi bloku,
+
+do konwersji na mapy w dziedzinie przestrzennej lub jako surowe bloki współczynników.
+
+3️⃣ Wstępne przetwarzanie
+Stworzymy moduł preprocessingu, który:
+
+czyta plik .yuv (rekonstrukcję) → główny kanał wejściowy,
+
+czyta block_stats.csv i generuje:
+
+mapę głębokości (depth map),
+
+mapę QP (per piksel lub per CTU),
+
+mapy flag filtrów (binarne maski: SAO_on/off, ALF_on/off),
+
+mapy trybów predykcji (Intra / Inter / konkretne tryby Intra),
+
+czyta nasze pliki dequant_poc_X.bin i przypisuje współczynniki do odpowiednich pozycji w ramce.
+
+📌 Wszystko zostanie zsynchronizowane po POC, żeby ramka i jej cechy się zgadzały.
+
+4️⃣ Nowa struktura danych w dataset
+Rozszerzymy dataset tak, aby:
+
+wejście do sieci miało więcej kanałów:
+[Y, U, V, depth, QP, SAO_flag, ALF_flag, pred_mode, coeff_energy, ...]
+
+każdy kanał będzie dopasowany przestrzennie do chunku.
+
+będzie można łatwo włączać/wyłączać poszczególne cechy (do eksperymentów).
+
+5️⃣ Modyfikacja sieci neuronowej
+W enhancer.py (lub analogicznym modelu) zwiększamy liczbę kanałów wejściowych.
+
+Możemy zastosować early fusion (wszystkie kanały jako wejście konwolucji) lub late fusion (oddzielna ścieżka dla cech, potem łączenie).
+
+Sprawdzimy, czy dodatkowe cechy poprawiają metryki PSNR/SSIM/VMAF.
+
+6️⃣ Etapy implementacji
+Etap 1 – włączenie depth mapy do datasetu.
+
+Etap 2 – dodanie map QP i flag filtrów z CSV.
+
+Etap 3 – dodanie trybów predykcji.
+
+Etap 4 – dodanie zdekwantowanych współczynników z .bin.
+
+Etap 5 – modyfikacja modelu i testy wpływu poszczególnych cech.
+
+Etap 6 – optymalizacja (np. normalizacja cech, dobór architektury).
+
+7️⃣ Wyniki i analiza
+Porównanie jakości rekonstrukcji z i bez dodatkowych cech.
+
+Analiza, które cechy najbardziej pomagają.
+
+Wizualizacje map cech dla przykładowych ramek.
+
+
+
+DLACZEGO TEN RECON YUV? - recon.yuv to właśnie wynikowy film dekodera.
+
+
+
+czyli do rozpoczęcia prac nad siecią i eksperymentami muszę:
+
+1. pobrać dataset y4m
+2. przekonwertować go na małe filmy o długości 64 klatek w formacie yuv (+ plus plik .info do każdego filmu żeby odczytywać z niego wartości)
+3. przekodować te filmy za pomocą vvenc i czytając pliki info w różnych wariantach, tj. AI, RA, przełączając filtry.
+4. rozkodować powstałe w ten sposób pliki vvc do odpowiednich lokalizacji aby mieć: 
+- recony
+- csv ze statami bloków
+- csv z zdekwantowanymi współczynnikami per klatka
+5. od razu przy dekodowaniu użyć skryptów aby sparsować te dane z csv aby mieć gotowe dane do uczenia sieci
+
+
+propozycja chata:
+
+Jeśli chcesz, mogę Ci od razu rozpisać skrypt dekodująco-parsujący, który w jednym kroku:
+
+odpali VTM z odpowiednimi parametrami,
+
+odczyta block_stats.csv i dequant_poc_*.csv,
+
+zapisze to jako gotowy zestaw cech (.npz) pod dany recon.
+
+To by Ci skróciło punkt 4 i 5 do jednego polecenia.
+
+Pliki .npz to po prostu spakowane (skompresowane) archiwa NumPy, które mogą przechowywać wiele macierzy / tensorów w jednym pliku.
+
+
+
+"Powiedz tylko, czy na start robimy tylko Y (luma) współczynniki, czy od razu Y+Cb+Cr."

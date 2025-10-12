@@ -1,0 +1,34 @@
+trainer:
+  mode: discriminator
+  discriminator:
+    epochs: 50
+    discriminator_lr: 0.001
+    discriminator_scheduler_milestones: [10, 20, 60]
+discriminator:
+  implementation: conv
+  save_to: 'experiments/discriminator/conv.pth'
+  features:
+    kernel_size: 7
+    padding: 3
+    stride: 2
+    features: 32
+    pool: true
+  structure:
+    blocks:
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 64
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 64
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 128
+  classifier:
+    kernel_size: 4
+    padding: 0
+    stride: 4
+    features: 1
