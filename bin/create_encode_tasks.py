@@ -11,8 +11,8 @@ else:
 
 
 mkvs = [x for x in os.listdir(data_dir) if x.endswith("yuv")]
-profiles = ["RA", "AI"]
-QP = 32, 37, 42, 47
+profiles = ["AI"]
+QP = 28, 32, 37, 42, 47
 
 
 tasks = []

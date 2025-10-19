@@ -14,7 +14,7 @@ CHUNK_SIZE = 128 * 1024  # 128 KB
 DEFAULT_FOLDER = "data"
 BASE_URL = "https://media.xiph.org/video/derf/y4m/"
 
-SELECTED_VIDEOS = [
+SELECTED_VIDEOS = [ # jedno z tych usunąć bo nie pasuje!
     "720p50_mobcal_ter.y4m",
     "720p50_parkrun_ter.y4m",
     "720p50_shields_ter.y4m",
@@ -72,43 +72,96 @@ SELECTED_VIDEOS = [
 ]
 
 
+def get_y4m_frame_count(filename: str) -> int:
+    """Get frame count from Y4M file by counting FRAME headers"""
+    try:
+        frame_count = 0
+        with open(filename, 'rb') as f:
+            # Read header line to get frame dimensions
+            header = f.readline().decode('ascii', errors='ignore')
+            if not header.startswith('YUV4MPEG2'):
+                return 0
+            
+            # Parse width and height from header
+            width = height = 0
+            for param in header.split():
+                if param.startswith('W'):
+                    width = int(param[1:])
+                elif param.startswith('H'):
+                    height = int(param[1:])
+            
+            if width == 0 or height == 0:
+                return 0
+            
+            # Calculate frame size (YUV420p format: Y + U/4 + V/4)
+            frame_size = width * height * 3 // 2
+            
+            # Count FRAME headers
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                if line.startswith(b'FRAME'):
+                    frame_count += 1
+                    # Skip frame data
+                    f.seek(frame_size, 1)  # Skip relative to current position
+                    
+        return frame_count
+    except Exception as e:
+        print(f"Error reading Y4M file: {e}")
+        return 0
+
+
 def process_video(target: str) -> None:
     parts = target.split(".")
     parts[-1] = "yuv"
     dest = ".".join(parts)
     
-    # First, get total frame count
-    probe_cmd = f'ffprobe -v quiet -select_streams v:0 -count_frames -show_entries stream=nb_frames -csv=p=0 "{target}"'
+    # First, get total frame count using Y4M parsing (faster than ffprobe)
+    total_frames = get_y4m_frame_count(target)
     
-    try:
-        result = subprocess.run(probe_cmd, shell=True, capture_output=True, text=True)
-        total_frames = int(result.stdout.strip())
+    if total_frames == 0:
+        print(f"Could not determine frame count for {target}, trying ffprobe...")
+        # Fallback to ffprobe without -count_frames (faster)
+        probe_cmd = f'ffprobe -v quiet -select_streams v:0 -show_entries stream=nb_frames -csv=p=0 "{target}"'
+        try:
+            result = subprocess.run(probe_cmd, shell=True, capture_output=True, text=True)
+            if result.stdout.strip():
+                total_frames = int(result.stdout.strip())
+        except (subprocess.CalledProcessError, ValueError):
+            pass
+    
+    if total_frames > 0:
         print(f"Total frames in {target}: {total_frames}")
         
-        # Calculate middle 64 frames
+        # Calculate frames to take (skip first 64, then take next 64)
         if total_frames <= 64:
             # If video has 64 or fewer frames, take all frames
             start_frame = 0
             frames_to_take = total_frames
             print(f"Video too short, taking all {frames_to_take} frames")
+        elif total_frames <= 128:
+            # If video has between 65-128 frames, take from frame 32 onwards
+            start_frame = min(32, total_frames - 64)
+            frames_to_take = min(64, total_frames - start_frame)
+            print(f"Medium length video, taking {frames_to_take} frames starting from frame {start_frame}")
         else:
-            # Take middle 64 frames
-            start_frame = (total_frames - 64) // 2
+            # Take frames 64-127 (skip first 64, then take next 64)
+            start_frame = 64
             frames_to_take = 64
-            print(f"Taking 64 frames starting from frame {start_frame} (middle section)")
+            print(f"Taking frames 64-127 (skipping first 64 frames)")
         
         # FFmpeg command with skip and limit
         ffmpeg_cmd = (
             f"ffmpeg -y -i {target} -vf \"select='between(n,{start_frame},{start_frame + frames_to_take - 1})'\" "
             f"-c:v rawvideo -pixel_format yuv420p -frames:v {frames_to_take} {dest}"
         )
-        
-    except (subprocess.CalledProcessError, ValueError) as e:
-        print(f"Error getting frame count for {target}: {e}")
-        print("Falling back to first 64 frames")
-        # Fallback to original method
+    else:
+        print(f"Could not determine frame count for {target}, using frames 64-127")
+        # Fallback: skip first 64 frames, take next 64
         ffmpeg_cmd = (
-            f"ffmpeg -y -i {target} -c:v rawvideo -pixel_format yuv420p -frames:v 64 {dest}"
+            f"ffmpeg -y -i {target} -vf \"select='between(n,64,127)'\" "
+            f"-c:v rawvideo -pixel_format yuv420p -frames:v 64 {dest}"
         )
     
     mediainfo_cmd = f"mediainfo -f {target} > {target}.info"
