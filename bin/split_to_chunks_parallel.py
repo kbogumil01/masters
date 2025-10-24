@@ -11,6 +11,10 @@ from dataclasses import dataclass, asdict
 from pydantic import validate_arguments
 from random import choice
 from pathlib import Path
+import concurrent.futures
+import threading
+import multiprocessing
+import shutil
 
 
 @validate_arguments
@@ -37,16 +41,16 @@ class Chunk:
     corner: str
 
 
-class Splitter:
+class ParallelSplitter:
     """
-    Splits videos into chunks for easy processing
+    Parallel version - Splits videos into chunks for easy processing using multiple threads
     """
 
     INFO_HEIGHT_REGEX: str = re.compile(r"^\s*Height\s*:\s*(\d+)\s*$")
     INFO_WIDTH_REGEX: str = re.compile(r"^\s*Width\s*:\s*(\d+)\s*$")
     INFO_FRAMES_REGEX: str = re.compile(r"^\s*Frame count\s*:\s*(\d+)\s*$")
     ENCODED_REGEX: str = re.compile(
-        "^(?P<name>[\d\s\w]+)_(?P<profile>AI|RA)_QP(?P<qp>\d{2})_ALF(?P<alf>\d{1})_DB(?P<db>\d{1})_SAO(?P<sao>\d{1}).yuv"
+        r"^(?P<name>[\d\s\w]+)_(?P<profile>AI|RA)_QP(?P<qp>\d{2})_ALF(?P<alf>\d{1})_DB(?P<db>\d{1})_SAO(?P<sao>\d{1}).yuv"
     )
 
     METADATA_FORMAT: str = "{name}.*.info"
@@ -73,6 +77,7 @@ class Splitter:
         frame_folder: str = None,
         orig_frame_folder: str = None,
         auto_cleanup_frames: bool = True,
+        max_workers: int = None,
     ) -> None:
         super().__init__()
 
@@ -92,6 +97,15 @@ class Splitter:
         self.orig_frame_folder = orig_frame_folder or "videos/orig_frames"
         self.auto_cleanup_frames = auto_cleanup_frames
 
+        # Parallel processing settings
+        if max_workers is None:
+            # For I/O bound tasks, use more workers than CPU cores
+            max_workers = min(multiprocessing.cpu_count() * 2, 8)
+        self.max_workers = max_workers
+        
+        # Thread-safe cache management
+        self._cache_lock = threading.Lock()
+
     def load_intra_frames(self, metadata: Metadata, dirname: str) -> List[int]:
         # Look for decode.log in the directory
         file_path = os.path.join(self.encoded_path, dirname, "decode.log")
@@ -102,32 +116,23 @@ class Splitter:
         lines = [l for l in lines if l.startswith("POC")]
         return {i for i, l in enumerate(lines) if "I-SLICE" in l}
 
-    def split_chunks(self) -> None:
-        """
-        splits chunks :)
-        """
-        dirs = [d for d in os.listdir(self.encoded_path) 
-                if os.path.isdir(os.path.join(self.encoded_path, d)) and not d.startswith('.')]
-        dirs = sorted(dirs)
+    def _update_done_cache_thread_safe(self, dirname: str) -> None:
+        """Thread-safe method to update done cache"""
+        with self._cache_lock:
+            with open(self.done_cache, "a") as f:
+                f.write(f"\n{dirname}")
 
+    def _process_single_video(self, dirname: str) -> str:
+        """Process a single video directory - designed to be run in parallel"""
         try:
-            with open(self.done_cache) as f:
-                done = f.read().splitlines()
-        except:
-            done = []
-
-        for dirname in tqdm(dirs):
-            if dirname in done:
-                continue
-
             # Skip RA sequences for now (focus on AI)
             if "_RA_" in dirname:
-                continue
+                return f"SKIPPED {dirname} (RA profile)"
 
             # Check if recon.yuv exists
             recon_path = os.path.join(self.encoded_path, dirname, "recon.yuv")
             if not os.path.exists(recon_path):
-                continue
+                return f"SKIPPED {dirname} (no recon.yuv)"
 
             metadata = self.load_metadata_for(dirname)
             intra_frames = self.load_intra_frames(metadata, dirname)
@@ -174,9 +179,58 @@ class Splitter:
             if self.auto_cleanup_frames:
                 self.cleanup_frames(metadata)
             
-            with open(self.done_cache, "a") as f:
-                f.write(f"\n{dirname}")
-            print(f"DONE {dirname}")
+            # Thread-safe cache update
+            self._update_done_cache_thread_safe(dirname)
+            
+            return f"DONE {dirname}"
+            
+        except Exception as e:
+            return f"ERROR {dirname}: {str(e)}"
+
+    def split_chunks(self) -> None:
+        """
+        splits chunks :) - PARALLEL VERSION
+        """
+        dirs = [d for d in os.listdir(self.encoded_path) 
+                if os.path.isdir(os.path.join(self.encoded_path, d)) and not d.startswith('.')]
+        dirs = sorted(dirs)
+
+        # Load existing done cache
+        try:
+            with open(self.done_cache) as f:
+                done = set(f.read().splitlines())
+        except:
+            done = set()
+
+        # Filter out already done directories
+        remaining_dirs = [d for d in dirs if d not in done]
+        
+        if not remaining_dirs:
+            print("All videos already processed!")
+            return
+            
+        print(f"Processing {len(remaining_dirs)} videos with {self.max_workers} workers...")
+
+        # Process videos in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all tasks
+            future_to_dir = {
+                executor.submit(self._process_single_video, dirname): dirname 
+                for dirname in remaining_dirs
+            }
+            
+            # Process completed tasks with progress bar
+            with tqdm(total=len(remaining_dirs), desc="Processing videos") as pbar:
+                for future in concurrent.futures.as_completed(future_to_dir):
+                    dirname = future_to_dir[future]
+                    try:
+                        result = future.result()
+                        print(result)
+                        pbar.set_postfix_str(f"Last: {dirname[:20]}...")
+                    except Exception as exc:
+                        print(f"ERROR processing {dirname}: {exc}")
+                    finally:
+                        pbar.update(1)
 
     def load_metadata_for(self, dirname: str) -> Metadata:
         """
@@ -356,9 +410,7 @@ class Splitter:
     def cleanup_frames(self, metadata: Metadata) -> None:
         """
         Remove frame files after chunks are created to save disk space
-        """
-        import shutil
-        
+        """        
         print(f"🧹 Cleaning up frames for {metadata.file}...")
         
         # Pattern for frames: videos/frames/{file}__{height}__{width}/{profile}_QP{qp}_ALF{alf}_DB{db}_SAO{sao}/
@@ -400,6 +452,10 @@ class Splitter:
             pass  # Ignore if not empty or other errors
 
 
+# Backward compatibility - alias for the original class name
+Splitter = ParallelSplitter
+
+
 if __name__ == "__main__":
     import sys
 
@@ -407,7 +463,7 @@ if __name__ == "__main__":
     
     # Basic required arguments: data_path, encoded_path, chunk_folder, orig_chunk_folder, done_cache
     if len(args) < 5:
-        print("Usage: python split_to_chunks.py data_path encoded_path chunk_folder orig_chunk_folder done_cache [chunk_width] [chunk_height] [chunk_border] [frame_folder] [orig_frame_folder] [auto_cleanup]")
+        print("Usage: python split_to_chunks_parallel.py data_path encoded_path chunk_folder orig_chunk_folder done_cache [chunk_width] [chunk_height] [chunk_border] [frame_folder] [orig_frame_folder] [auto_cleanup] [max_workers]")
         sys.exit(1)
     
     # Convert optional numeric arguments to int
@@ -417,6 +473,10 @@ if __name__ == "__main__":
         args[6] = int(args[6])  # chunk_height  
     if len(args) >= 8:
         args[7] = int(args[7])  # chunk_border
+    if len(args) >= 11:
+        args[10] = args[10].lower() == 'true'  # auto_cleanup
+    if len(args) >= 12:
+        args[11] = int(args[11])  # max_workers
 
-    s = Splitter(*args)
+    s = ParallelSplitter(*args)
     s.split_chunks()

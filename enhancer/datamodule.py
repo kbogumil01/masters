@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 from .config import DataloaderConfig, DatasetConfig
 
 from .dataset import VVCDataset, FrameDataset
+from .dataset_npz import VVCDatasetNPZ, get_vvc_dataset
 
 
 class LoaderWrapper:
@@ -94,7 +95,7 @@ class VVCDataModule(pl.LightningDataModule):
         :param stage:
         """
         if stage == "fit":
-            self.dataset_train = VVCDataset(
+            self.dataset_train = get_vvc_dataset(
                 settings=self.dataset_config.train,
                 chunk_transform=self.chunk_transform(),
                 metadata_transform=self.metadata_transform(),
@@ -104,7 +105,7 @@ class VVCDataModule(pl.LightningDataModule):
             epochs_for_real_one = len(self.dataset_train) / self.config.n_step
             print(f"it takes {epochs_for_real_one} of training to reach one real epoch")
 
-            self.dataset_val = VVCDataset(
+            self.dataset_val = get_vvc_dataset(
                 settings=self.dataset_config.val,
                 chunk_transform=self.chunk_transform(),
                 metadata_transform=self.metadata_transform(),
@@ -124,7 +125,7 @@ class VVCDataModule(pl.LightningDataModule):
                     metadata_transform=self.metadata_transform(),
                 )
             else:
-                self.dataset_test = VVCDataset(
+                self.dataset_test = get_vvc_dataset(
                     settings=self.dataset_config.test,
                     chunk_transform=self.chunk_transform(),
                     metadata_transform=self.metadata_transform(),
