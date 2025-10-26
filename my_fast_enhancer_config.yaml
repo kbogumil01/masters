@@ -1,0 +1,84 @@
+test_full_frames: false  # Use chunks for testing (WITH VVC features!)
+
+# Dataset paths - OPTIMIZED: chunks on fast WSL disk, decoded on USB
+dataset:
+  train:
+    chunk_folder: "./chunks_dataset/chunks"           # FAST: internal disk
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"  # FAST: internal disk
+    chunk_height: 132
+    chunk_width: 132
+  val:
+    chunk_folder: "./chunks_dataset/chunks"           # FAST: internal disk
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"  # FAST: internal disk
+    chunk_height: 132
+    chunk_width: 132
+  test:
+    chunk_folder: "./chunks_dataset/chunks"           # FAST: internal disk
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"  # FAST: internal disk
+    chunk_height: 132
+    chunk_width: 132
+
+# VVC features - OK on USB (cached in RAM, read once per video)
+fused_maps_dir: "/mnt/d/data_mgr/decoded"
+
+# Dataloader config - CONSERVATIVE for VVC features (13 extra channels!)
+dataloader:
+  batch_size: 8         # ↓ Smaller batch (20 channels instead of 3)
+  val_batch_size: 6
+  test_batch_size: 6
+  n_step: 300           # Standard iterations
+  val_n_step: 2
+  test_n_step: 5
+
+# Training config - ENHANCER ONLY (no GAN) - FAST TEST
+trainer:
+  mode: enhancer        # ← KLUCZOWE: tylko enhancer, bez GAN!
+  channels_grad_scales:
+    - 0.66666
+    - 0.66666
+    - 0.66666
+  enhancer:
+    epochs: 30          # Rozsądna liczba (było 50)
+    lr: 0.0001
+    scheduler_gamma: 0.5
+    scheduler_milestones: [8, 16, 24, 30]  # Dopasowane do 30 epok
+    saved_chunk_folder: enhanced/fast_test
+
+# Enhancer (DenseNet) - ULTRA-COMPACT for FAST training
+enhancer:
+  implementation: dense
+  save_to: 'experiments/fast_test/dense_enh.pth'
+  bn_size: 1.5
+  features:
+    kernel_size: 5      # Mały kernel
+    padding: 2
+    stride: 1
+    features: 32        # Małe features dla szybkości
+    pool: false
+    dense: true
+  structure:
+    blocks:
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        features: 32
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 48
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 32
+        transition:
+          mode: same
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    features: 3
+    tanh: false

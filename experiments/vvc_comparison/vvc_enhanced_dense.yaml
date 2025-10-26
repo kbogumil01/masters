@@ -1,0 +1,102 @@
+test_full_frames: false
+
+# Dataset paths
+dataset:
+  train:
+    chunk_folder: "./chunks_dataset/chunks"
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"
+    chunk_height: 132
+    chunk_width: 132
+  val:
+    chunk_folder: "./chunks_dataset/chunks"
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"
+    chunk_height: 132
+    chunk_width: 132
+  test:
+    chunk_folder: "./chunks_dataset/chunks"
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"
+    chunk_height: 132
+    chunk_width: 132
+
+# VVC FEATURES - GŁÓWNA RÓŻNICA vs baseline Piotra!
+fused_maps_dir: "/mnt/d/data_mgr/decoded"
+
+# Dataloader config - OPTIMIZED
+dataloader:
+  batch_size: 16           
+  val_batch_size: 12
+  test_batch_size: 12
+  # n_step removed - using full dataset now!
+  val_n_step: 50           # Still used by val_dataloader wrapper
+  test_n_step: 5
+  num_workers: 4         
+  prefetch_factor: 2
+
+# Training config - ENHANCER ONLY with optimizations
+trainer:
+  mode: enhancer
+  precision: "16-mixed"       # Mixed precision for 2x speedup
+  limit_train_batches: 0.05   # Use 5% of training data per epoch (quick iterations)
+  limit_val_batches: 0.05     # Validate on 5% of data only
+  channels_grad_scales:
+    - 0.66666
+    - 0.66666
+    - 0.66666
+  enhancer:
+    epochs: 10                    # REDUCED: With more data per epoch, need less epochs
+    lr: 0.0001                    
+    scheduler_gamma: 0.5
+    scheduler_milestones: [4, 7]  # 2 milestones for 10 epochs
+    saved_chunk_folder: enhanced/vvc_comparison
+
+# Enhancer - DENSE 64-48-32-16 (PIOTR'S BEST) + VVC features
+enhancer:
+  implementation: dense
+  save_to: 'experiments/vvc_comparison/vvc_dense_enh.pth'
+  bn_size: 1.5
+  features:
+    kernel_size: 9      # Like Piotr's config
+    padding: 4
+    stride: 1
+    features: 64        # Initial 64 features
+    pool: false
+    dense: true
+  structure:
+    blocks:
+      - kernel_size: 7
+        padding: 3
+        stride: 1
+        features: 64    # 64x1 block (Piotr's best architecture)
+        transition:
+          mode: same
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        features: 48    # 48x1 block
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 32    # 32x1 block
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 16    # 16x1 block (final before output)
+        transition:
+          mode: same
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    features: 3
+    tanh: false
+
+# Logging
+logging:
+  project_name: vvc-enhancer
+  run_name: vvc_comparison_dense64
+  log_every_n_steps: 50
+  log_images: true

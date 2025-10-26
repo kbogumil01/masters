@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import os
 import glob
+import pickle
 from typing import Tuple, Any, List
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,9 +62,15 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
         # Cache for fused maps (VVC features are still cached per video)
         self._fused_maps_cache = {} if fused_maps_dir else None
         
-        # PERFORMANCE: Small NPZ cache to reduce I/O on slow USB drives
-        self._npz_cache = {}
-        self._npz_cache_max_size = 10  # Keep 10 most recent NPZ files
+        # NEW: Cache glob results to avoid filesystem overhead
+        self._fused_file_cache = {} if fused_maps_dir else None
+        
+        # SIMPLIFIED: Direct mmap access without cache (files on fast SSD)
+        # Each access will use mmap - OS handles caching efficiently!
+        self._npz_handles = {}  # Keep handles open for mmap
+        
+        # Cache empty VVC tensor for baseline (avoid recreating every time)
+        self._empty_vvc = torch.zeros(13, self.chunk_height, self.chunk_width) if not fused_maps_dir else None
 
     def _load_npz_index(self):
         """Build index without loading data into memory (lazy loading)"""
@@ -180,7 +187,6 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
         print(f"📂 Split '{self.split}': {len(self.chunk_index)} chunks from {len(selected_videos)} videos")
         print(f"   Train videos: {len(train_videos)}, Val: {len(val_videos)}, Test: {len(test_videos)}")
 
-
     def _metadata_to_np(self, metadata: NPZMetadata) -> np.ndarray:
         """Convert metadata to numpy array - OPTIMIZED for ALL_INTRA AI-only data
         
@@ -202,8 +208,8 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
     def _load_vvc_features(self, metadata: NPZMetadata) -> torch.Tensor:
         """Load VVC features - FIXED for ALL_INTRA AI-only data"""
         if not self.fused_maps_dir:
-            # Return zeros if no VVC features available
-            return torch.zeros(13, self.chunk_height, self.chunk_width)
+            # Return cached empty tensor (avoid recreating)
+            return self._empty_vvc
             
         # FIXED: Build cache key without removed fields
         cache_key = f"{metadata.file}_AI_QP{metadata.qp}_ALF{int(metadata.alf)}_DB{int(metadata.db)}_SAO{int(metadata.sao)}"
@@ -218,24 +224,37 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
                 del self._fused_maps_cache[oldest]
             
             # Load fused maps for this video configuration
-            # FIXED: Support both formats - with/without leading zeros
+            # FIXED: Cache glob results to avoid repeated filesystem calls
             fused_dir = os.path.join(self.fused_maps_dir, cache_key, "fused_maps")
             
-            # Try multiple patterns to find the file
-            patterns = [
-                f"fused_maps_poc{metadata.frame}.npz",           # poc1.npz (no leading zeros)
-                f"fused_maps_poc{metadata.frame:03d}.npz",       # poc001.npz (3 digits)
-                f"fused_maps_poc{metadata.frame:03d}_*.npz",     # poc001_*.npz (with suffix)
-            ]
-            
-            fused_files = []
-            for pattern in patterns:
-                fused_files = glob.glob(os.path.join(fused_dir, pattern))
-                if fused_files:
-                    break
+            # Check glob cache first
+            glob_cache_key = f"{cache_key}_poc{metadata.frame}"
+            if glob_cache_key in self._fused_file_cache:
+                fused_files = self._fused_file_cache[glob_cache_key]
+            else:
+                # Try multiple patterns to find the file
+                patterns = [
+                    f"fused_maps_poc{metadata.frame}.npz",           # poc1.npz (no leading zeros)
+                    f"fused_maps_poc{metadata.frame:03d}.npz",       # poc001.npz (3 digits)
+                    f"fused_maps_poc{metadata.frame:03d}_*.npz",     # poc001_*.npz (with suffix)
+                ]
+                
+                fused_files = []
+                for pattern in patterns:
+                    fused_files = glob.glob(os.path.join(fused_dir, pattern))
+                    if fused_files:
+                        break
+                
+                # Cache result (even if empty!)
+                self._fused_file_cache[glob_cache_key] = fused_files
             
             if fused_files:
-                fused_data = np.load(fused_files[0], allow_pickle=True)
+                try:
+                    fused_data = np.load(fused_files[0], allow_pickle=True)
+                except (pickle.UnpicklingError, OSError, ValueError) as e:
+                    # File corrupted - return zeros instead of crashing
+                    print(f"WARNING: Corrupted fused_maps file {fused_files[0]}, using zeros: {e}")
+                    return torch.zeros(13, self.chunk_height, self.chunk_width)
                 
                 # CRITICAL FIX: Fused maps are stored as separate keys, not single 'fused_maps' tensor
                 # Stack all 13 channels in correct order
@@ -307,7 +326,7 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
         return len(self.chunk_index)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple, torch.Tensor]:
-        """Get chunk data - LAZY LOADING with small cache for performance"""
+        """Get chunk data - Per-worker cached NPZ handles (multiprocessing-safe)"""
         
         # Get index entry
         entry = self.chunk_index[idx]
@@ -316,31 +335,19 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
         chunk_idx = entry['chunk_idx']
         metadata = entry['metadata']
         
-        # Use small cache to reduce I/O on slow drives (USB/network)
-        if npz_path not in self._npz_cache:
-            if len(self._npz_cache) >= self._npz_cache_max_size:
-                # Remove oldest entry to limit memory
-                oldest_key = next(iter(self._npz_cache))
-                del self._npz_cache[oldest_key]
-            
-            # Load with mmap for fast access
-            self._npz_cache[npz_path] = np.load(npz_path, allow_pickle=True, mmap_mode='r')
+        # Per-worker NPZ handle caching with mmap (read-only safe!)
+        # FIXED: Use mmap_mode='r' for zero-copy loading
+        if npz_path not in self._npz_handles:
+            # NOTE: Each worker process gets its own mmap (safe in multiprocessing!)
+            self._npz_handles[npz_path] = np.load(npz_path, mmap_mode='r', allow_pickle=True)
         
-        chunk_data = self._npz_cache[npz_path]['chunks'][chunk_idx].copy()  # (132, 132, 3)
+        if orig_npz_path not in self._npz_handles:
+            self._npz_handles[orig_npz_path] = np.load(orig_npz_path, mmap_mode='r', allow_pickle=True)
         
-        if orig_npz_path not in self._npz_cache:
-            if len(self._npz_cache) >= self._npz_cache_max_size:
-                oldest_key = next(iter(self._npz_cache))
-                del self._npz_cache[oldest_key]
-            
-            self._npz_cache[orig_npz_path] = np.load(orig_npz_path, allow_pickle=True, mmap_mode='r')
-        
-        orig_chunk_data = self._npz_cache[orig_npz_path]['chunks'][chunk_idx].copy()  # (132, 132, 3)
-        
-        # Convert numpy arrays to format expected by ToTensor() 
-        # ToTensor() expects HWC numpy arrays and converts to CHW tensors
-        chunk_np = chunk_data.astype(np.uint8)  # Keep as uint8 for ToTensor()
-        orig_chunk_np = orig_chunk_data.astype(np.uint8)
+        # Access via mmap - OS handles caching, no RAM bloat!
+        # CRITICAL: .copy() to detach from mmap before processing
+        chunk_np = self._npz_handles[npz_path]['chunks'][chunk_idx].copy()
+        orig_chunk_np = self._npz_handles[orig_npz_path]['chunks'][chunk_idx].copy()
         
         # Apply transforms (ToTensor will convert HWC->CHW and normalize 0-1)
         if self.chunk_transform:

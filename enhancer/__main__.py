@@ -85,6 +85,10 @@ if __name__ == "__main__":
         accelerator="auto",
         devices=1 if torch.cuda.is_available() else None,
         max_epochs=config.trainer.current.epochs,
+        precision=config.trainer.precision,  # NEW: Support mixed precision from config
+        limit_train_batches=config.trainer.limit_train_batches,  # NEW: Limit training data
+        limit_val_batches=config.trainer.limit_val_batches,  # NEW: Limit validation data
+        # num_sanity_val_steps=0,  # Re-enabled - should work now with fixed dataloader
         callbacks=[
             TQDMProgressBar(refresh_rate=20),
             LearningRateMonitor(logging_interval="step"),

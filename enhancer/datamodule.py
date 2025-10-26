@@ -136,20 +136,18 @@ class VVCDataModule(pl.LightningDataModule):
                 )
 
     def train_dataloader(self):
-        """train_dataloader."""
+        """train_dataloader - FIXED: Remove LoaderWrapper to use full dataset."""
         data_loader = DataLoader(
             self.dataset_train,
             batch_size=self.config.batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=10,  # Agresywne - masz 12 procesorów w WSL2
-            persistent_workers=True,  # Keep workers alive between epochs
-            prefetch_factor=4,  # Agresywny prefetching - 40 batchy w pipeline
+            num_workers=8,
+            persistent_workers=True,
+            prefetch_factor=4,
         )
-        return LoaderWrapper(
-            data_loader,
-            self.config.n_step,
-        )
+        # REMOVED LoaderWrapper - now uses entire train split per epoch!
+        return data_loader
 
     def test_dataloader(self, shuffle=False):
         """test_dataloader."""
@@ -171,10 +169,10 @@ class VVCDataModule(pl.LightningDataModule):
             self.dataset_val,
             batch_size=self.config.val_batch_size,
             shuffle=True,
-            pin_memory=True,
-            num_workers=10,  # Konsystencja z train
+            pin_memory=False,  # DISABLED - causes VRAM bloat during sanity check
+            num_workers=2,  # Less for val
             persistent_workers=True,
-            prefetch_factor=4,  # Agresywny prefetching
+            prefetch_factor=2,
         )
         return LoaderWrapper(
             data_loader,

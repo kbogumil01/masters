@@ -144,6 +144,9 @@ class ModeTrainingConfig(BaseModel):
 
 class TrainerConfig(BaseModel):
     mode: TrainingMode = TrainingMode.GAN
+    precision: Optional[str] = None  # NEW: e.g. "16-mixed"
+    limit_train_batches: Optional[float] = None  # NEW: e.g. 0.1 for 10% of data
+    limit_val_batches: Optional[float] = None  # NEW: e.g. 0.05 for 5% of data
 
     gan: ModeTrainingConfig = ModeTrainingConfig()
     enhancer: ModeTrainingConfig = ModeTrainingConfig()

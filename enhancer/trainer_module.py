@@ -43,8 +43,10 @@ class TrainerModule(pl.LightningModule):
         self.probe = self.config.probe
 
         self.num_samples = self.config.num_samples
-        self.ssim = SSIM(data_range=1.0, win_size=9, per_channel=True)
-        self.msssim = MS_SSIM(data_range=1.0, win_size=9, per_channel=True)
+        
+        # SSIM modules - EXACTLY like Piotr (per_channel=True, channel=3)
+        self.ssim = SSIM(data_range=1.0, win_size=9, channel=3, per_channel=True)
+        self.msssim = MS_SSIM(data_range=1.0, win_size=9, channel=3, per_channel=True)
 
         self.test_full_frames = test_full_frames
         self.channels_grad_scales = config.channels_grad_scales
@@ -84,21 +86,17 @@ class TrainerModule(pl.LightningModule):
         valid = torch.ones(chunks.size(0), 1)
         valid = valid.type_as(chunks)
 
-        # split channels
-        def split(x):
-            return x[:, [0]], x[:, [1]], x[:, [2]]
+        # split channels FIRST (needed for per-channel SSIM/MS-SSIM)
+        eY, eU, eV = enhanced[:, [0]], enhanced[:, [1]], enhanced[:, [2]]
+        oY, oU, oV = orig_chunks[:, [0]], orig_chunks[:, [1]], orig_chunks[:, [2]]
 
-        eY, eU, eV = split(enhanced)
-        oY, oU, oV = split(orig_chunks)
+        # Channels grad scales as tensor (no gradients needed - just weights)
+        channels_grad_scales = torch.tensor(self.channels_grad_scales, 
+                                           device=enhanced.device, dtype=enhanced.dtype)
 
-        def to_tensor(x):
-            return torch.Tensor(x).to(enhanced.device)
-
-        channels_grad_scales = to_tensor(self.channels_grad_scales)
-
-        # those are by channel
+        # EXACTLY like Piotr: per_channel=True returns 3-element tensor!
         ssim_l = 1 - self.ssim(orig_chunks, enhanced)
-        ssimY, ssimU, ssimV = ssim_l
+        ssimY, ssimU, ssimV = ssim_l  # Unpacking per-channel results
         ssim_loss = (channels_grad_scales * ssim_l).sum()
 
         self.log(f"{prefix}g_ssimY_loss", ssimY, prog_bar=False)
@@ -107,6 +105,7 @@ class TrainerModule(pl.LightningModule):
         self.log(f"{prefix}g_ssim_loss", ssim_loss, prog_bar=False)
         self.log(f"{prefix}g_ssim", ssim_l.mean(), prog_bar=False)
 
+        # MS-SSIM exactly like Piotr
         msssim_l = 1 - self.msssim(orig_chunks, enhanced)
         msssimY, msssimU, msssimV = msssim_l
         msssim_loss = (channels_grad_scales * msssim_l).sum()
@@ -117,10 +116,12 @@ class TrainerModule(pl.LightningModule):
         self.log(f"{prefix}g_msssim_loss", msssim_loss, prog_bar=False)
         self.log(f"{prefix}g_msssim", msssim_l.mean(), prog_bar=False)
 
+        # MSE/L1 per channel (keep Piotr's approach with torch.stack)
         mseY = F.mse_loss(oY, eY)
         mseU = F.mse_loss(oU, eU)
         mseV = F.mse_loss(oV, eV)
-        mse_loss = (channels_grad_scales * to_tensor([mseY, mseU, mseV])).sum()
+        mse_per_channel = torch.stack([mseY, mseU, mseV])
+        mse_loss = (channels_grad_scales * mse_per_channel).sum()
         self.log(f"{prefix}g_mse_loss", mse_loss, prog_bar=False)
         self.log(f"{prefix}g_mseY_loss", mseY, prog_bar=False)
         self.log(f"{prefix}g_mseU_loss", mseU, prog_bar=False)
@@ -129,7 +130,8 @@ class TrainerModule(pl.LightningModule):
         l1Y = F.l1_loss(oY, eY)
         l1U = F.l1_loss(oU, eU)
         l1V = F.l1_loss(oV, eV)
-        l1_loss = (channels_grad_scales * to_tensor([l1Y, l1U, l1V])).sum()
+        l1_per_channel = torch.stack([l1Y, l1U, l1V])
+        l1_loss = (channels_grad_scales * l1_per_channel).sum()
         self.log(f"{prefix}g_l1_loss", l1_loss, prog_bar=False)
         self.log(f"{prefix}g_l1Y_loss", l1Y, prog_bar=False)
         self.log(f"{prefix}g_l1U_loss", l1U, prog_bar=False)
@@ -141,11 +143,12 @@ class TrainerModule(pl.LightningModule):
         ):
             preds = self.discriminator(enhanced)
             gd_loss = self.adversarial_loss(preds, valid)
+            # GAN mode: Piotr's full loss with MS-SSIM
             g_loss = (
-                0.1 * msssim_loss
-                + 0.1 * ssim_loss
-                + mse_loss
-                + 0.5 * l1_loss
+                0.08 * msssim_loss  # MS-SSIM (GAN only)
+                + 0.08 * ssim_loss
+                + 0.29 * mse_loss
+                + 0.45 * l1_loss
                 + 0.1 * gd_loss
             )
             self.log(f"{prefix}g_d_loss", gd_loss, prog_bar=True)
@@ -153,12 +156,15 @@ class TrainerModule(pl.LightningModule):
             self.enhancer_losses = self.enhancer_losses[: self.probe]
         else:
             preds = None
-            g_loss = 0.1 * msssim_loss + 0.1 * ssim_loss + mse_loss + 0.5 * l1_loss
+            # Enhancer-only mode: Piotr's baseline loss
+            # L = α1·L1 + α2·L2 + α3·(1-SSIM)
+            # Balanced weights (sum=1.0): α1=0.5, α2=0.3, α3=0.2
+            g_loss = 0.5 * l1_loss + 0.3 * mse_loss + 0.2 * ssim_loss
 
         self.log(f"{prefix}g_loss", g_loss, prog_bar=True)
 
         if stage != "train":
-            cY, cU, cV = split(chunks)
+            cY, cU, cV = chunks[:, [0]], chunks[:, [1]], chunks[:, [2]]
 
             enhanced_psnr = psnr(
                 enhanced,
@@ -328,7 +334,7 @@ class TrainerModule(pl.LightningModule):
             real_preds = None
             fake_preds = preds
 
-        if batch_idx % 100 == 0:
+        if batch_idx % 1000 == 0:  # ← Changed from 100 to 1000 (10x less frequent)
             self.log_images(
                 enhanced,
                 chunks,
@@ -372,7 +378,7 @@ class TrainerModule(pl.LightningModule):
             real_preds = None
             fake_preds = preds
 
-        if batch_idx % 100 == 0:
+        if batch_idx % 1000 == 0:  # Log images less frequently
             self.log_images(
                 enhanced,
                 chunks,

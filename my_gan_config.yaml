@@ -21,39 +21,39 @@ dataset:
 # VVC features - OK on USB (cached in RAM, read once per video)
 fused_maps_dir: "/mnt/d/data_mgr/decoded"
 
-# Dataloader config - OPTIMIZED for RTX 5070 (12GB VRAM) + 28GB RAM
+# Dataloader config - STABLE OPTIMIZED (max stable performance)
 dataloader:
-  batch_size: 20        # Agresywne dla RTX 5070 - wykorzystaj VRAM!
-  val_batch_size: 20    # Większe batche = lepsze GPU utilization
-  test_batch_size: 20
-  n_step: 400           # Szybsze walidacje (~1/7 realnej epoki)
-  val_n_step: 3         # Krótka walidacja
+  batch_size: 16        # Balans: 2x więcej niż przed crash, bezpieczniej niż 24
+  val_batch_size: 12    # Bezpieczne dla sanity check
+  test_batch_size: 12
+  n_step: 800           # ↑ z 450 - rzadsze walidacje = szybszy trening
+  val_n_step: 3
   test_n_step: 5
 
-# Training config - GAN DenseNet
+# Training config - FAST TRAINING (< 10h target)
 trainer:
   mode: gan
-  separation_epochs: 10
+  separation_epochs: 5   # ↓ z 10 - szybszy start GAN
   channels_grad_scales:
     - 0.66666
     - 0.66666
     - 0.66666
   gan:
-    epochs: 200
+    epochs: 50            # ↓ z 200 - 50 epok często wystarcza!
     discriminator_lr: 0.001
     enhancer_lr: 0.00002
     discriminator_scheduler_gamma: 0.5
-    discriminator_scheduler_milestones: [1, 2, 5, 10, 25, 50, 75, 100, 125, 150, 175, 200]
+    discriminator_scheduler_milestones: [1, 2, 5, 10, 25, 50]  # Dopasowane do 50 epok
     enhancer_scheduler_gamma: 0.5
-    enhancer_scheduler_milestones: [50, 100, 150, 200]
+    enhancer_scheduler_milestones: [12, 25, 37, 50]  # Dopasowane do 50 epok
     saved_chunk_folder: enhanced/gan
 
-# Discriminator
+# Discriminator - ULTRA-LIGHTWEIGHT for fast training (< 10h)
 discriminator:
   save_to: 'experiments/gan/conv_dis.pth'
   features:
-    kernel_size: 7
-    padding: 3
+    kernel_size: 5  # ↓ z 7 - mniejszy kernel
+    padding: 2
     stride: 2
     features: 32
     pool: false
@@ -71,63 +71,47 @@ discriminator:
         padding: 1
         stride: 2
         features: 256
-      - kernel_size: 4
-        padding: 1
-        stride: 2
-        features: 512
-      - kernel_size: 4
-        padding: 1
-        stride: 2
-        features: 1024
+      # USUNIĘTE: bloki 512 i 1024 (za ciężkie!)
   classifier:
-    kernel_size: 2
+    kernel_size: 8  # Zwiększony bo mamy tylko 3 bloki
     padding: 0
     stride: 1
     features: 1
 
-# Enhancer (DenseNet)
+# Enhancer (DenseNet) - COMPACT for speed
 enhancer:
   implementation: dense
   save_to: 'experiments/gan/dense_enh.pth'
   # load_from: 'experiments/enhancer/dense.pth'  # Odkomentuj jeśli masz pretrained
   bn_size: 1.5
   features:
-    kernel_size: 9
-    padding: 4
+    kernel_size: 7  # ↓ z 9 - mniejszy
+    padding: 3
     stride: 1
-    features: 64
+    features: 48    # ↓ z 64 - mniej features
     pool: false
     dense: true
   structure:
     blocks:
-      - kernel_size: 7
-        padding: 3
-        stride: 1
-        features: 64
-        transition:
-          mode: same
-      - kernel_size: 5
+      - kernel_size: 5  # ↓ z 7
         padding: 2
         stride: 1
-        features: 96
+        features: 48    # ↓ z 64
+        transition:
+          mode: same
+      - kernel_size: 3  # ↓ z 5
+        padding: 1
+        stride: 1
+        features: 64    # ↓ z 96
         transition:
           mode: same
       - kernel_size: 3
         padding: 1
         stride: 1
-        features: 64
+        features: 48    # ↓ z 64
         transition:
           mode: same
-      - kernel_size: 3
-        padding: 1
-        stride: 1
-        features: 48
-        transition:
-          mode: same
-      - kernel_size: 3
-        padding: 1
-        stride: 1
-        features: 32
+      # USUNIĘTE: 2 ostatnie bloki (48 i 32 features)
   output_block:
     kernel_size: 3
     padding: 1
