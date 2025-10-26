@@ -92,7 +92,7 @@ class Enhancer(nn.Module):
             out_channels=16,  # Compressed VVC features
         )
 
-        # Update total features: RGB(3) + metadata(6) + VVC(16) = 25
+        # Total input features: RGB(3) + metadata(4) + VVC(16) = 23 channels
         num_features = config.metadata_features + config.input_shape[2] + 16
 
         self.model = {
@@ -111,7 +111,7 @@ class Enhancer(nn.Module):
         # Process VVC features if available
         if vvc_features is not None and vvc_features.numel() > 0:
             encoded_vvc = self.vvc_encoder(vvc_features)
-            # Concatenate: RGB + metadata + VVC = (3+6+16) = 25 channels
+            # Concatenate: RGB(3) + metadata(4) + VVC(16) = 23 channels
             data = torch.cat((input_, encoded_metadata, encoded_vvc), 1)
         else:
             # Fallback: create zero VVC features for backward compatibility

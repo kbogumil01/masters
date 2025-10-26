@@ -200,17 +200,24 @@ class VVCDataset(torch.utils.data.Dataset):
 
     def _metadata_to_np(self, metadata: Metadata) -> Any:
         """
-        Numpy representation of metadata
+        Numpy representation of metadata - OPTIMIZED for ALL_INTRA AI-only
+        
+        Only includes features that vary across samples:
+        - QP: Main compression quality parameter (varies)
+        - ALF, SAO, DB: Filter on/off flags (vary)
+        
+        Excluded constant features (no learning value):
+        - profile: Always AI for ALL_INTRA data  
+        - is_intra: Always True for ALL_INTRA data
         """
         return np.array(
             (
-                0 if metadata.profile == "RA" else 1,
-                metadata.qp / 64,
-                metadata.alf,
-                metadata.sao,
-                metadata.db,
-                metadata.is_intra,
-            )
+                metadata.qp / 64,  # Normalized QP
+                metadata.alf,      # ALF filter
+                metadata.sao,      # SAO filter  
+                metadata.db,       # DB filter
+            ),
+            dtype=np.float32
         )
 
     def _load_vvc_features(self, chunk_obj: Chunk) -> torch.Tensor:
@@ -371,17 +378,24 @@ class FrameDataset(torch.utils.data.Dataset):
 
     def _metadata_to_np(self, metadata: Metadata) -> Any:
         """
-        Numpy representation of metadata
+        Numpy representation of metadata - OPTIMIZED for ALL_INTRA AI-only
+        
+        Only includes features that vary across samples:
+        - QP: Main compression quality parameter (varies)
+        - ALF, SAO, DB: Filter on/off flags (vary)
+        
+        Excluded constant features (no learning value):
+        - profile: Always AI for ALL_INTRA data  
+        - is_intra: Always True for ALL_INTRA data
         """
         return np.array(
             (
-                0 if metadata.profile == "RA" else 1,
-                metadata.qp / 64,
-                metadata.alf,
-                metadata.sao,
-                metadata.db,
-                metadata.is_intra,
-            )
+                metadata.qp / 64,  # Normalized QP
+                metadata.alf,      # ALF filter
+                metadata.sao,      # SAO filter  
+                metadata.db,       # DB filter
+            ),
+            dtype=np.float32
         )
 
     def load_frame(self, metadata: Metadata) -> Tuple[Any, Any, Any]:

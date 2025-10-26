@@ -100,6 +100,7 @@ class VVCDataModule(pl.LightningDataModule):
                 chunk_transform=self.chunk_transform(),
                 metadata_transform=self.metadata_transform(),
                 fused_maps_dir=self.fused_maps_dir,  # NEW
+                split='train',  # NEW: train split
             )
 
             epochs_for_real_one = len(self.dataset_train) / self.config.n_step
@@ -110,6 +111,7 @@ class VVCDataModule(pl.LightningDataModule):
                 chunk_transform=self.chunk_transform(),
                 metadata_transform=self.metadata_transform(),
                 fused_maps_dir=self.fused_maps_dir,  # NEW
+                split='val',  # NEW: validation split
             )
 
             epochs_for_real_one = len(self.dataset_val) / self.config.val_n_step
@@ -130,6 +132,7 @@ class VVCDataModule(pl.LightningDataModule):
                     chunk_transform=self.chunk_transform(),
                     metadata_transform=self.metadata_transform(),
                     fused_maps_dir=self.fused_maps_dir,  # NEW
+                    split='test',  # NEW: test split
                 )
 
     def train_dataloader(self):
@@ -139,7 +142,9 @@ class VVCDataModule(pl.LightningDataModule):
             batch_size=self.config.batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=os.cpu_count(),
+            num_workers=10,  # Agresywne - masz 12 procesorów w WSL2
+            persistent_workers=True,  # Keep workers alive between epochs
+            prefetch_factor=4,  # Agresywny prefetching - 40 batchy w pipeline
         )
         return LoaderWrapper(
             data_loader,
@@ -153,7 +158,7 @@ class VVCDataModule(pl.LightningDataModule):
             batch_size=self.config.test_batch_size if not self.test_full_frames else 1,
             shuffle=shuffle,
             pin_memory=True,
-            num_workers=os.cpu_count(),
+            num_workers=2,  # Reduced from os.cpu_count()
         )
         return data_loader
 
@@ -167,7 +172,9 @@ class VVCDataModule(pl.LightningDataModule):
             batch_size=self.config.val_batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=os.cpu_count(),
+            num_workers=10,  # Konsystencja z train
+            persistent_workers=True,
+            prefetch_factor=4,  # Agresywny prefetching
         )
         return LoaderWrapper(
             data_loader,

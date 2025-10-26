@@ -89,8 +89,8 @@ class NetworkConfig(BaseModel):
 
 
 class EnhancerConfig(NetworkConfig):
-    metadata_size: int = 6
-    metadata_features: int = 6
+    metadata_size: int = 4  # QP, ALF, SAO, DB (profile and is_intra are constant for ALL_INTRA AI)
+    metadata_features: int = 4  # Only meaningful features for ALL_INTRA AI
 
     with_mask: bool = True
 

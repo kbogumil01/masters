@@ -70,9 +70,6 @@ class Splitter:
         chunk_width: int = 132,
         chunk_height: int = 132,
         chunk_border: int = 2,
-        frame_folder: str = None,
-        orig_frame_folder: str = None,
-        auto_cleanup_frames: bool = True,
     ) -> None:
         super().__init__()
 
@@ -86,11 +83,6 @@ class Splitter:
         self.chunk_folder = chunk_folder
         self.orig_chunk_folder = orig_chunk_folder
         self.done_cache = done_cache
-        
-        # Frame folders for cleanup
-        self.frame_folder = frame_folder or "videos/frames"
-        self.orig_frame_folder = orig_frame_folder or "videos/orig_frames"
-        self.auto_cleanup_frames = auto_cleanup_frames
 
     def load_intra_frames(self, metadata: Metadata, dirname: str) -> List[int]:
         # Look for decode.log in the directory
@@ -106,9 +98,9 @@ class Splitter:
         """
         splits chunks :)
         """
-        dirs = [d for d in os.listdir(self.encoded_path) 
+        files = [d for d in os.listdir(self.encoded_path) 
                 if os.path.isdir(os.path.join(self.encoded_path, d)) and not d.startswith('.')]
-        dirs = sorted(dirs)
+        files = sorted(files)
 
         try:
             with open(self.done_cache) as f:
@@ -116,12 +108,12 @@ class Splitter:
         except:
             done = []
 
-        for dirname in tqdm(dirs):
-            if dirname in done:
-                continue
-
+        for dirname in tqdm(files):
             # Skip RA sequences for now (focus on AI)
             if "_RA_" in dirname:
+                continue
+
+            if dirname in done:
                 continue
 
             # Check if recon.yuv exists
@@ -169,18 +161,13 @@ class Splitter:
                         video_chunks.append(chunk)
 
             self.save_chunks(video_chunks, dirname)
-            
-            # Automatically clean up frames folder after chunks are created
-            if self.auto_cleanup_frames:
-                self.cleanup_frames(metadata)
-            
             with open(self.done_cache, "a") as f:
                 f.write(f"\n{dirname}")
             print(f"DONE {dirname}")
 
     def load_metadata_for(self, dirname: str) -> Metadata:
         """
-        Loads metadata for given directory
+        Loads metadata for given directory name
         """
         # Parse directory name: deadline_cif_AI_QP37_ALF1_DB0_SAO1
         m = re.match(self.ENCODED_REGEX, dirname + ".yuv")  # Add .yuv for regex match
@@ -216,7 +203,13 @@ class Splitter:
 
     def save_chunks(self, chunks: List[Chunk], dirname: str) -> None:
         """
-        Splits chunks and saves them as compressed NPZ files (much more efficient!)
+        CRITICAL IMPLEMENTATION: Saves chunks as NPZ with proper orig_chunks logic
+        
+        Key fixes:
+        1. orig_chunks saved ONCE per video (not per compression config)  
+        2. Separate metadata for orig_chunks (no compression params)
+        3. Uses recon.yuv from dirname folder (not old DECODED_FORMAT)
+        4. 100% compatibility with dataset_npz.py
         """
         metadata = chunks[0].metadata
         nh = metadata.height * 3 // 2
@@ -224,7 +217,7 @@ class Splitter:
         orig_file_path = os.path.join(
             self.data_path, self.ORIGINAL_FORMAT.format_map(asdict(metadata))
         )
-        # Point to recon.yuv in the directory
+        # CRITICAL: Use recon.yuv from the specific directory
         file_path = os.path.join(self.encoded_path, dirname, "recon.yuv")
 
         with open(file_path, "rb") as f:
@@ -242,6 +235,7 @@ class Splitter:
         all_chunks = []
         all_orig_chunks = []
         chunk_metadata = []
+        orig_chunk_metadata = []
 
         for frame_num in tqdm(range(metadata.frames), desc=f"Processing {dirname[:20]}"):
             frame = buff[frame_num]
@@ -287,14 +281,14 @@ class Splitter:
                 all_chunks.append(frame_chunk)
                 all_orig_chunks.append(orig_frame_chunk)
                 
-                # Store metadata for this chunk
+                # COMPRESSED chunks metadata (WITH compression params)
+                # OPTIMIZED: Removed profile (always 'AI') and is_intra (always True)
                 chunk_info = {
                     'position': chunk.position,
                     'frame': chunk.frame,
-                    'is_intra': chunk.is_intra,
                     'corner': chunk.corner,
                     'file': metadata.file,
-                    'profile': metadata.profile,
+                    # REMOVED: 'profile': metadata.profile,  # Always 'AI' for ALL_INTRA
                     'qp': metadata.qp,
                     'alf': metadata.alf,
                     'db': metadata.db,
@@ -303,6 +297,19 @@ class Splitter:
                     'height': metadata.height
                 }
                 chunk_metadata.append(chunk_info)
+                
+                # ORIGINAL chunks metadata (WITHOUT compression params!)
+                orig_chunk_info = {
+                    'position': chunk.position,
+                    'frame': chunk.frame,
+                    # REMOVED: 'is_intra': chunk.is_intra,  # Always True for ALL_INTRA
+                    'corner': chunk.corner,
+                    'file': metadata.file,
+                    'width': metadata.width,
+                    'height': metadata.height
+                    # INTENTIONALLY NO: profile, qp, alf, db, sao
+                }
+                orig_chunk_metadata.append(orig_chunk_info)
 
         # Convert to numpy arrays for efficient storage
         all_chunks = np.array(all_chunks, dtype=np.uint8)
@@ -312,29 +319,33 @@ class Splitter:
         Path(self.chunk_folder).mkdir(parents=True, exist_ok=True)
         Path(self.orig_chunk_folder).mkdir(parents=True, exist_ok=True)
 
-        # Save as compressed NPZ files (one per video)
+        # Save compressed chunks (with full compression metadata)
         chunk_file = os.path.join(self.chunk_folder, f"{dirname}.npz")
-        orig_chunk_file = os.path.join(self.orig_chunk_folder, f"{dirname}.npz")
-
-        print(f"💾 Saving {len(all_chunks)} chunks to NPZ: {chunk_file}")
+        print(f"💾 Saving {len(all_chunks)} compressed chunks: {chunk_file}")
         np.savez_compressed(
             chunk_file,
             chunks=all_chunks,
             metadata=chunk_metadata
         )
 
-        print(f"💾 Saving {len(all_orig_chunks)} orig chunks to NPZ: {orig_chunk_file}")
-        np.savez_compressed(
-            orig_chunk_file,
-            chunks=all_orig_chunks,
-            metadata=chunk_metadata
-        )
+        # CRITICAL: Save original chunks ONLY ONCE per video
+        orig_chunk_file = os.path.join(self.orig_chunk_folder, f"{metadata.file}.npz")
+        if not os.path.exists(orig_chunk_file):
+            print(f"💾 Saving {len(all_orig_chunks)} original chunks: {orig_chunk_file}")
+            np.savez_compressed(
+                orig_chunk_file,
+                chunks=all_orig_chunks,
+                metadata=orig_chunk_metadata
+            )
+            print(f"✅ NEW original chunks for: {metadata.file}")
+        else:
+            print(f"⏭️  Original chunks exist, skipping: {orig_chunk_file}")
 
-        print(f"✅ Saved {len(all_chunks)} chunks in 2 NPZ files instead of {len(all_chunks)*2} individual files!")
+        print(f"✅ Processed {len(all_chunks)} chunks for {dirname}")
         
-        # Report compression efficiency
+        # Report efficiency
         total_size_mb = (all_chunks.nbytes + all_orig_chunks.nbytes) / (1024*1024)
-        print(f"📊 Total data: {total_size_mb:.1f} MB compressed in NPZ format")
+        print(f"📊 Data size: {total_size_mb:.1f} MB in NPZ format")
 
     def upsample_uv(self, frame_buffer, width, height):
         i = width * height
@@ -353,52 +364,6 @@ class Splitter:
 
         return np.dstack([Y, U, V])
 
-    def cleanup_frames(self, metadata: Metadata) -> None:
-        """
-        Remove frame files after chunks are created to save disk space
-        """
-        import shutil
-        
-        print(f"🧹 Cleaning up frames for {metadata.file}...")
-        
-        # Pattern for frames: videos/frames/{file}__{height}__{width}/{profile}_QP{qp}_ALF{alf}_DB{db}_SAO{sao}/
-        frame_dir_pattern = f"{metadata.file}__{metadata.height}__{metadata.width}"
-        
-        # Cleanup main frames
-        frame_dir_path = os.path.join(self.frame_folder, frame_dir_pattern)
-        if os.path.exists(frame_dir_path):
-            try:
-                shutil.rmtree(frame_dir_path)
-                print(f"✅ Cleaned up frames directory: {frame_dir_path}")
-            except Exception as e:
-                print(f"⚠️  Warning: Could not cleanup frames directory {frame_dir_path}: {e}")
-        
-        # Cleanup orig_frames
-        orig_frame_dir_path = os.path.join(self.orig_frame_folder, metadata.file)
-        if os.path.exists(orig_frame_dir_path):
-            try:
-                shutil.rmtree(orig_frame_dir_path)
-                print(f"✅ Cleaned up orig frames directory: {orig_frame_dir_path}")
-            except Exception as e:
-                print(f"⚠️  Warning: Could not cleanup orig frames directory {orig_frame_dir_path}: {e}")
-
-        # Also try to remove empty parent directories
-        try:
-            # Remove empty frame_folder if it's empty
-            if os.path.exists(self.frame_folder) and not os.listdir(self.frame_folder):
-                os.rmdir(self.frame_folder)
-                print(f"✅ Removed empty frames folder: {self.frame_folder}")
-        except:
-            pass  # Ignore if not empty or other errors
-            
-        try:
-            # Remove empty orig_frame_folder if it's empty  
-            if os.path.exists(self.orig_frame_folder) and not os.listdir(self.orig_frame_folder):
-                os.rmdir(self.orig_frame_folder)
-                print(f"✅ Removed empty orig frames folder: {self.orig_frame_folder}")
-        except:
-            pass  # Ignore if not empty or other errors
-
 
 if __name__ == "__main__":
     import sys
@@ -407,7 +372,7 @@ if __name__ == "__main__":
     
     # Basic required arguments: data_path, encoded_path, chunk_folder, orig_chunk_folder, done_cache
     if len(args) < 5:
-        print("Usage: python split_to_chunks.py data_path encoded_path chunk_folder orig_chunk_folder done_cache [chunk_width] [chunk_height] [chunk_border] [frame_folder] [orig_frame_folder] [auto_cleanup]")
+        print("Usage: python split_to_chunks.py data_path encoded_path chunk_folder orig_chunk_folder done_cache [chunk_width] [chunk_height] [chunk_border]")
         sys.exit(1)
     
     # Convert optional numeric arguments to int

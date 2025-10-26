@@ -1,0 +1,136 @@
+test_full_frames: false  # Use chunks for testing (WITH VVC features!)
+
+# Dataset paths - OPTIMIZED: chunks on fast WSL disk, decoded on USB
+dataset:
+  train:
+    chunk_folder: "./chunks_dataset/chunks"           # FAST: internal disk
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"  # FAST: internal disk
+    chunk_height: 132
+    chunk_width: 132
+  val:
+    chunk_folder: "./chunks_dataset/chunks"           # FAST: internal disk
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"  # FAST: internal disk
+    chunk_height: 132
+    chunk_width: 132
+  test:
+    chunk_folder: "./chunks_dataset/chunks"           # FAST: internal disk
+    orig_chunk_folder: "./chunks_dataset/orig_chunks"  # FAST: internal disk
+    chunk_height: 132
+    chunk_width: 132
+
+# VVC features - OK on USB (cached in RAM, read once per video)
+fused_maps_dir: "/mnt/d/data_mgr/decoded"
+
+# Dataloader config - OPTIMIZED for RTX 5070 (12GB VRAM) + 28GB RAM
+dataloader:
+  batch_size: 20        # Agresywne dla RTX 5070 - wykorzystaj VRAM!
+  val_batch_size: 20    # Większe batche = lepsze GPU utilization
+  test_batch_size: 20
+  n_step: 400           # Szybsze walidacje (~1/7 realnej epoki)
+  val_n_step: 3         # Krótka walidacja
+  test_n_step: 5
+
+# Training config - GAN DenseNet
+trainer:
+  mode: gan
+  separation_epochs: 10
+  channels_grad_scales:
+    - 0.66666
+    - 0.66666
+    - 0.66666
+  gan:
+    epochs: 200
+    discriminator_lr: 0.001
+    enhancer_lr: 0.00002
+    discriminator_scheduler_gamma: 0.5
+    discriminator_scheduler_milestones: [1, 2, 5, 10, 25, 50, 75, 100, 125, 150, 175, 200]
+    enhancer_scheduler_gamma: 0.5
+    enhancer_scheduler_milestones: [50, 100, 150, 200]
+    saved_chunk_folder: enhanced/gan
+
+# Discriminator
+discriminator:
+  save_to: 'experiments/gan/conv_dis.pth'
+  features:
+    kernel_size: 7
+    padding: 3
+    stride: 2
+    features: 32
+    pool: false
+  structure:
+    blocks:
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 64
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 128
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 256
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 512
+      - kernel_size: 4
+        padding: 1
+        stride: 2
+        features: 1024
+  classifier:
+    kernel_size: 2
+    padding: 0
+    stride: 1
+    features: 1
+
+# Enhancer (DenseNet)
+enhancer:
+  implementation: dense
+  save_to: 'experiments/gan/dense_enh.pth'
+  # load_from: 'experiments/enhancer/dense.pth'  # Odkomentuj jeśli masz pretrained
+  bn_size: 1.5
+  features:
+    kernel_size: 9
+    padding: 4
+    stride: 1
+    features: 64
+    pool: false
+    dense: true
+  structure:
+    blocks:
+      - kernel_size: 7
+        padding: 3
+        stride: 1
+        features: 64
+        transition:
+          mode: same
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        features: 96
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 64
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 48
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 32
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    features: 3
+    tanh: false
