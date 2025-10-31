@@ -326,7 +326,7 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
         return len(self.chunk_index)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple, torch.Tensor]:
-        """Get chunk data - Per-worker cached NPZ handles (multiprocessing-safe)"""
+        """Get chunk data - Simple NPZ loading with LRU cache"""
         
         # Get index entry
         entry = self.chunk_index[idx]
@@ -335,17 +335,18 @@ class VVCDatasetNPZ(torch.utils.data.Dataset):
         chunk_idx = entry['chunk_idx']
         metadata = entry['metadata']
         
-        # Per-worker NPZ handle caching with mmap (read-only safe!)
-        # FIXED: Use mmap_mode='r' for zero-copy loading
+        # DISABLED: Worker affinity caused swap thrashing with multiple workers
+        # Solution: Use num_workers=1 (simpler, more stable)
+        
+        # Per-worker NPZ handle caching WITHOUT mmap (safer for multiprocessing)
+        # Each worker only loads files assigned to it (via affinity above)
         if npz_path not in self._npz_handles:
-            # NOTE: Each worker process gets its own mmap (safe in multiprocessing!)
-            self._npz_handles[npz_path] = np.load(npz_path, mmap_mode='r', allow_pickle=True)
+            self._npz_handles[npz_path] = np.load(npz_path, allow_pickle=True)
         
         if orig_npz_path not in self._npz_handles:
-            self._npz_handles[orig_npz_path] = np.load(orig_npz_path, mmap_mode='r', allow_pickle=True)
+            self._npz_handles[orig_npz_path] = np.load(orig_npz_path, allow_pickle=True)
         
-        # Access via mmap - OS handles caching, no RAM bloat!
-        # CRITICAL: .copy() to detach from mmap before processing
+        # Access cached data - already in RAM from np.load()
         chunk_np = self._npz_handles[npz_path]['chunks'][chunk_idx].copy()
         orig_chunk_np = self._npz_handles[orig_npz_path]['chunks'][chunk_idx].copy()
         

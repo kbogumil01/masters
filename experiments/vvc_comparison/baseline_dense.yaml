@@ -21,32 +21,32 @@ dataset:
 # NO VVC FEATURES - baseline comparison
 # fused_maps_dir: null
 
-# Dataloader config - OPTIMIZED
+# Dataloader config - WORKER AFFINITY optimization
 dataloader:
-  batch_size: 16           
+  batch_size: 8            # RESTORED: Piotr's batch size
   val_batch_size: 12
   test_batch_size: 12
-  # n_step removed - using full dataset now!
-  val_n_step: 50           # Still used by val_dataloader wrapper
+  n_step: 300              # RESTORED: Piotr's quick epochs!
+  val_n_step: 50
   test_n_step: 5
-  num_workers: 8         
-  prefetch_factor: 4
+  num_workers: 4           # With worker affinity - each worker handles subset
+  prefetch_factor: 1       # REDUCED: Worker affinity needs less prefetch
 
-# Training config - ENHANCER ONLY with optimizations
+# Training config - RESTORED to Piotr's approach
 trainer:
   mode: enhancer
-  precision: "16-mixed"       # Mixed precision for 2x speedup
-  limit_train_batches: 0.05   # Use 5% of training data per epoch (quick iterations)
-  limit_val_batches: 0.05     # Validate on 5% of data only
+  precision: null          # RESTORED: No mixed precision (simpler)
+  # limit_train_batches removed - using n_step in LoaderWrapper
+  limit_val_batches: 0.1   # Keep: 10% validation
   channels_grad_scales:
     - 0.66666
     - 0.66666
     - 0.66666
   enhancer:
-    epochs: 10                    # REDUCED: With more data per epoch, need less epochs
-    lr: 0.0001                    
+    epochs: 50                   # MORE epochs like Piotr (he used 99)
+    lr: 0.0001
     scheduler_gamma: 0.5
-    scheduler_milestones: [4, 7]  # 2 milestones for 10 epochs
+    scheduler_milestones: [15, 30, 45]
     saved_chunk_folder: enhanced/baseline_comparison
 
 # Enhancer - DENSE 64-48-32-16 (PIOTR'S BEST) WITHOUT VVC

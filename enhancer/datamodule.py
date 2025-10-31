@@ -136,18 +136,21 @@ class VVCDataModule(pl.LightningDataModule):
                 )
 
     def train_dataloader(self):
-        """train_dataloader - FIXED: Remove LoaderWrapper to use full dataset."""
+        """train_dataloader - RESTORED: Use LoaderWrapper like Piotr."""
         data_loader = DataLoader(
             self.dataset_train,
             batch_size=self.config.batch_size,
             shuffle=True,
-            pin_memory=True,
-            num_workers=8,
-            persistent_workers=True,
-            prefetch_factor=4,
+            pin_memory=False,  # RESTORED: Like Piotr
+            num_workers=1,     # CHANGED: Single worker to prevent swap thrashing
+            persistent_workers=False,  # Not needed with 1 worker
+            prefetch_factor=2,
         )
-        # REMOVED LoaderWrapper - now uses entire train split per epoch!
-        return data_loader
+        # RESTORED LoaderWrapper - quick epochs like Piotr!
+        return LoaderWrapper(
+            data_loader,
+            self.config.n_step,
+        )
 
     def test_dataloader(self, shuffle=False):
         """test_dataloader."""
@@ -170,8 +173,8 @@ class VVCDataModule(pl.LightningDataModule):
             batch_size=self.config.val_batch_size,
             shuffle=True,
             pin_memory=False,  # DISABLED - causes VRAM bloat during sanity check
-            num_workers=2,  # Less for val
-            persistent_workers=True,
+            num_workers=1,  # Single worker for stability
+            persistent_workers=False,
             prefetch_factor=2,
         )
         return LoaderWrapper(
