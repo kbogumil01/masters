@@ -221,12 +221,11 @@ class Splitter:
         file_path = os.path.join(self.encoded_path, dirname, "recon.yuv")
 
         with open(file_path, "rb") as f:
-            buff = np.frombuffer(f.read(), dtype=np.uint16)
+            buff = np.frombuffer(f.read(), dtype=np.uint8)
 
         with open(orig_file_path, "rb") as f:
             orig_buff = np.frombuffer(f.read(), dtype=np.uint8)
 
-        buff = np.round(buff / 4).astype(np.uint8)
         buff = np.resize(buff, (metadata.frames, nh * metadata.width))
 
         orig_buff = np.resize(orig_buff, (metadata.frames, nh * metadata.width))
@@ -247,7 +246,7 @@ class Splitter:
                 + ((-metadata.height) % (self.chunk_height - 2 * self.chunk_border)),
                 self.chunk_border,
                 2 * self.chunk_border
-                + ((-metadata.width) % (self.chunk_height - 2 * self.chunk_border)),
+                + ((-metadata.width) % (self.chunk_width - 2 * self.chunk_border)),
                 cv2.BORDER_CONSTANT,
                 value=0.0,
             )
@@ -261,7 +260,7 @@ class Splitter:
                 + ((-metadata.height) % (self.chunk_height - 2 * self.chunk_border)),
                 self.chunk_border,
                 2 * self.chunk_border
-                + ((-metadata.width) % (self.chunk_height - 2 * self.chunk_border)),
+                + ((-metadata.width) % (self.chunk_width - 2 * self.chunk_border)),
                 cv2.BORDER_CONSTANT,
                 value=0.0,
             )

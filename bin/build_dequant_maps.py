@@ -44,7 +44,7 @@ def load_and_process_poc_files(input_dir: Path, debug: bool = False):
                     continue
                 poc_val, comp, x, y, w, h, off_bytes, len_bytes = map(int, line)
                 # Convert bytes to TCoeff positions (TCoeff = int32 = 4 bytes)
-                off_coeffs = off_bytes // 4 + coeffs_offset
+                off_coeffs = off_bytes // 4 + (coeffs_offset if len(csv_files) > 1 else 0)
                 len_coeffs = len_bytes // 4
                 meta_rows.append([poc_val, comp, x, y, w, h, off_coeffs, len_coeffs])
         
@@ -67,13 +67,17 @@ def load_and_process_poc_files(input_dir: Path, debug: bool = False):
     
     # Auto-detect resolution
     if combined_meta.size > 0:
-        max_x = (combined_meta[:, 2] + combined_meta[:, 4]).max()  # x + w
-        max_y = (combined_meta[:, 3] + combined_meta[:, 5]).max()  # y + h
-        
-        # ZWRÓĆ DOKŁADNY ROZMIAR, BEZ ZAOKRĄGLANIA
+        max_x = int((combined_meta[:, 2] + combined_meta[:, 4]).max())
+        max_y = int((combined_meta[:, 3] + combined_meta[:, 5]).max())
         width, height = max_x, max_y
+
     else:
         width, height = 1920, 1080  # fallback
+
+    if debug:
+        if width % 2 != 0 or height % 2 != 0:
+            print(f"[WARN] Detected odd frame size {width}x{height} (check block boundaries)")
+    
     
     poc_range = (min(poc_numbers), max(poc_numbers)) if poc_numbers else (0, 0)
     
@@ -141,6 +145,15 @@ def build_maps_for_poc(meta, coeffs, poc, width, height, with_dc=False, debug=Fa
     result = {"y_ac_energy": y_energy, "y_nz_density": y_nz}
     if with_dc:
         result["y_dc"] = y_dc
+
+    for k, v in result.items():
+        if v.shape != (height, width):
+            print(f"[WARN] {k} in POC {poc} has shape {v.shape}, resizing to {(height, width)}")
+            fixed = np.zeros((height, width), dtype=v.dtype)
+            hh = min(height, v.shape[0])
+            ww = min(width, v.shape[1])
+            fixed[:hh, :ww] = v[:hh, :ww]
+            result[k] = fixed
     
     return result
 
@@ -221,31 +234,47 @@ def main():
         print(f"  POC range: {poc_from}-{poc_to}")
         print(f"  Include DC: {args.with_dc}")
         print(f"  Save PNG: {args.save_png}")
-    
+
+    # używaj ścieżki absolutnej – decode_data.sh mógł zmienić cwd
+    outdir_abs = os.path.abspath(args.outdir)
+
     # Process each POC
     maps_saved = 0
     for poc in range(poc_from, poc_to + 1):
         if args.debug:
             print(f"Processing POC {poc}...")
-        
+
         maps = build_maps_for_poc(meta, coeffs, poc, width, height, args.with_dc, args.debug)
-        
+
         if maps is None:
             if args.debug:
                 print(f"  POC {poc}: no data, skipping")
             continue
-        
-        # Save NPZ
-        output_file = os.path.join(args.outdir, f"dequant_maps_poc{poc}.npz")
-        np.savez_compressed(output_file, **maps)
+
+        # upewnij się, że katalog istnieje
+        os.makedirs(outdir_abs, exist_ok=True)
+
+        # zapis BEZ pliku tymczasowego
+        output_file = os.path.join(outdir_abs, f"dequant_maps_poc{poc}.npz")
+        try:
+            np.savez_compressed(output_file, **maps)
+        except Exception as e:
+            print(f"[ERROR] failed to save {output_file}: {e}")
+            try:
+                print(f"  [DEBUG] cwd={os.getcwd()} outdir={outdir_abs}")
+            except Exception:
+                pass
+            continue
+        finally:
+            sys.stdout.flush()
+
         maps_saved += 1
-        
+
         if args.debug:
             print(f"  Saved: {output_file}")
-        
-        # Save PNG previews if requested
+
         if args.save_png:
-            save_png_preview(maps, args.outdir, poc, args.debug)
+            save_png_preview(maps, outdir_abs, poc, args.debug)
     
     # Cleanup original files if requested
     if args.cleanup:
