@@ -11,6 +11,7 @@ import numpy as np
 import glob
 import re
 from pathlib import Path
+import torch
 
 def sniff_csv(path):
     """Detect CSV delimiter"""
@@ -337,17 +338,15 @@ def main():
                 fixed[:hh, :ww] = v[:hh, :ww]
                 all_maps[k] = fixed
 
-        # --- bezpieczny zapis ---
-        output_file = os.path.join(args.outdir, f"fused_maps_poc{poc}.npz")
-        tmp_file = os.path.join(args.outdir, f"._fused_maps_poc{poc}.npz")  # ma .npz
 
+        # --- zapis wyłącznie w formacie .pt ---
         try:
-            np.savez_compressed(tmp_file, **all_maps)
-            os.replace(tmp_file, output_file)
+            torch_file = os.path.join(args.outdir, f"fused_maps_poc{poc}.pt")
+            torch.save({k: torch.from_numpy(v) for k, v in all_maps.items()}, torch_file)
+            if args.debug:
+                print(f"  Saved: {torch_file}")
         except Exception as e:
-            print(f"[ERROR] failed to save {output_file}: {e}")
-            if os.path.exists(tmp_file):
-                os.remove(tmp_file)
+            print(f"[ERROR] Failed to save .pt file for POC {poc}: {e}")
             dequant_data.close()
             boundary_data.close()
             continue
@@ -362,7 +361,7 @@ def main():
 
         if args.debug:
             total_maps = len(all_maps)
-            print(f"  Saved {total_maps} maps to: {output_file}")
+            print(f"  Saved {total_maps} maps to: {torch_file}")
 
         generated_count += 1
 
@@ -384,6 +383,15 @@ def main():
         if args.visualize:
             print("  + Comprehensive visualizations: *_visualization.png")
 
+    
+    try:
+        block_stats_path = os.path.join(args.input_dir, "block_stats.csv")
+        if os.path.isfile(block_stats_path):
+            os.remove(block_stats_path)
+            print(f"🧹 Removed block_stats.csv")
+    except Exception as e:
+        print(f"[WARN] Failed to remove block_stats.csv: {e}")
+    
     return 0
 
 if __name__ == "__main__":
