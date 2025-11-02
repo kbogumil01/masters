@@ -340,13 +340,39 @@ def main():
 
 
         # --- zapis wyłącznie w formacie .pt ---
+        # --- zapis tylko wybranych map w lekkiej formie (.pt) ---
         try:
+            # wybieramy tylko mapy źródłowe, istotne dla uczenia
+            keep = [
+                "y_ac_energy",
+                "y_nz_density",
+                "y_dc",            # opcjonalnie
+                "boundary_bin",
+                "boundary_weight",
+                "size_map_norm",
+            ]
+
+            packed = {}
+            for k in keep:
+                if k not in all_maps:
+                    continue
+                arr = all_maps[k]
+                # binarne / kategoryczne w uint8
+                if k == "boundary_bin":
+                    packed[k] = torch.from_numpy(arr.astype(np.uint8))
+                # reszta w float16
+                else:
+                    packed[k] = torch.from_numpy(arr).half()
+
             torch_file = os.path.join(args.outdir, f"fused_maps_poc{poc}.pt")
-            torch.save({k: torch.from_numpy(v) for k, v in all_maps.items()}, torch_file)
+            torch.save(packed, torch_file)
+
             if args.debug:
-                print(f"  Saved: {torch_file}")
+                kept_names = ', '.join(packed.keys())
+                print(f"  Saved lightweight maps ({kept_names}) to: {torch_file}")
+
         except Exception as e:
-            print(f"[ERROR] Failed to save .pt file for POC {poc}: {e}")
+            print(f"[ERROR] Failed to save reduced .pt file for POC {poc}: {e}")
             dequant_data.close()
             boundary_data.close()
             continue
