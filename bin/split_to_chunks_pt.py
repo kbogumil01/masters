@@ -180,62 +180,81 @@ def save_chunks_for_decoded(seq, data_root, out_root, chunk_w=132, chunk_h=132, 
     """
     seq: dict z iter_decoded_sequences
     zapisze: out_root/<dir_name>/chunks_pocXXX.pt
-    i TU już nie będziemy zgadywać rozdzielczości z nazwy
+    Teraz robust: wykrywa 8-bit vs 16-bit (10/12-bit packed) po rozmiarze pliku.
     """
     seq_dir = seq["dir_name"]
-    seq_path = seq["dir_path"]
     recon_path = seq["recon_path"]
 
-    # 1) najpierw spróbuj decode.log
-    width = height = frames = None
+    # 1) spróbuj decode.log
+    width = height = frames_log = None
     if seq["decode_log"] is not None:
         try:
-            width, height, frames = parse_decode_log(seq["decode_log"])
-            # print(f"[info] z decode.log: {width}x{height}, {frames} klatek")
+            width, height, frames_log = parse_decode_log(seq["decode_log"])
         except Exception as e:
-            print(f"[WARN] Nie udało się zparsować {seq['decode_log']}: {e}")
+            print(f"[WARN] decode.log parse failed for {seq_dir}: {e}")
 
-    # 2) jeśli nie ma decode.log -> spróbuj .info z ORYGINAŁU (po nazwie)
+    # 2) jeśli brak decode.log, spróbuj .info oryginału
     if width is None or height is None:
         orig_info = find_original_info_by_name(data_root, seq["name"])
         if orig_info is not None:
-            ow, oh, ofr = read_info_file(orig_info)
-            width, height = ow, oh
-            # liczba klatek: jeśli w decoded jest mniej, to weźmiemy min poniżej
-            frames = ofr if ofr is not None else 64
+            w, h, fr = read_info_file(orig_info)
+            width, height = w, h
+            frames_log = fr
 
-    # 3) ostatni brzydki fallback -> z nazwy folderu (np. _1280x720_)
+    # 3) ostateczny fallback z nazwy katalogu
     if width is None or height is None:
         m = re.search(r"_(\d+)x(\d+)_", seq_dir)
-        if m:
-            width = int(m.group(1))
-            height = int(m.group(2))
-        else:
-            raise RuntimeError(f"Nie umiem odczytać rozdzielczości dla {seq_dir} (brak decode.log i brak .info)")
+        if not m:
+            raise RuntimeError(f"Nie umiem odczytać rozdzielczości dla {seq_dir}")
+        width, height = int(m.group(1)), int(m.group(2))
 
-    # 4) liczba klatek
-    # jeśli nadal None -> zakładamy 64 jak u Piotra
-    if frames is None:
-        frames = 64
+    # --- Wykrywanie formatu recon.yuv po rozmiarze pliku ---
+    file_size = os.path.getsize(recon_path)  # w bajtach
+    wh = width * height
+    bytes_per_frame_8  = (wh * 3) // 2                     # YUV420 8-bit
+    bytes_per_frame_16 =  wh * 3                           # YUV420 10/12-bit zapisane w 16-bit
 
-    nh = height * 3 // 2
+    frames_8  = file_size // bytes_per_frame_8  if bytes_per_frame_8  > 0 else 0
+    frames_16 = file_size // bytes_per_frame_16 if bytes_per_frame_16 > 0 else 0
 
-    # wczytaj cały recon (16-bit)
-    with open(recon_path, "rb") as f:
-        buff = np.frombuffer(f.read(), dtype=np.uint16)
+    # wybierz wariant najbliższy temu z loga; jeśli brak loga – wybierz większą liczbę klatek (bardziej konserwatywnie)
+    if frames_log is not None and frames_log > 0:
+        diff8  = abs(frames_8  - frames_log)
+        diff16 = abs(frames_16 - frames_log)
+        use_16bit = diff16 <= diff8
+    else:
+        use_16bit = frames_16 >= frames_8
 
-    # policz ile REALNIE mamy klatek w pliku
-    # każdy frame = nh*width wartości uint16
-    vals_per_frame = nh * width
-    total_frames_in_file = buff.size // vals_per_frame
-    # weźmy najmniejszą wartość ze wszystkich źródeł
-    frames = min(frames, total_frames_in_file)
+    frames_file = frames_16 if use_16bit else frames_8
+    if frames_log:
+        # zabezpieczenie – jeżeli plik ma mniej klatek niż log, bierzemy tyle ile realnie jest
+        frames = min(frames_log, frames_file)
+    else:
+        frames = frames_file
 
-    # Piotr: /4 -> uint8
-    buff = np.round(buff / 4).astype(np.uint8)
-    buff = np.resize(buff, (frames, nh * width))
+    if frames <= 0:
+        raise RuntimeError(f"[ERR] Nie wykryto poprawnej liczby klatek dla {seq_dir} (size={file_size})")
 
-    # liczba chunków w poziomie/pionie
+    # --- Wczytanie bufora zgodnie z wariantem ---
+    nh = (height * 3) // 2
+    if use_16bit:
+        # 10/12-bit w 16-bit → skala /4 → uint8
+        with open(recon_path, "rb") as f:
+            buf16 = np.frombuffer(f.read(frames * bytes_per_frame_16), dtype=np.uint16)
+        # sanity: przytnij dokładnie do frames*nh*width elementów
+        nelems = frames * nh * width
+        buf16 = buf16[:nelems]
+        buf16 = np.reshape(buf16, (frames, nh * width))
+        buff = np.round(buf16 / 4).astype(np.uint8)
+    else:
+        # czysty 8-bit
+        with open(recon_path, "rb") as f:
+            buf8 = np.frombuffer(f.read(frames * bytes_per_frame_8), dtype=np.uint8)
+        nelems = frames * nh * width
+        buf8 = buf8[:nelems]
+        buff = np.reshape(buf8, (frames, nh * width))
+
+    # --- chunkowanie ---
     stride_x = chunk_w - 2 * border
     stride_y = chunk_h - 2 * border
     hor_chunks = math.ceil(width / stride_x)
@@ -247,7 +266,6 @@ def save_chunks_for_decoded(seq, data_root, out_root, chunk_w=132, chunk_h=132, 
     for poc in range(frames):
         frame = buff[poc]
         frame = upsample_uv(frame, width, height)
-        # border tak jak u Piotra
         frame = cv2.copyMakeBorder(
             frame,
             border,
@@ -258,47 +276,29 @@ def save_chunks_for_decoded(seq, data_root, out_root, chunk_w=132, chunk_h=132, 
             value=0,
         )
 
-        chunks = []
-        coords = []
-        corners = []
-        is_intra = []
-
+        chunks, coords, corners, is_intra = [], [], [], []
         for hy in range(ver_chunks):
             y = hy * stride_y
             for hx in range(hor_chunks):
                 x = hx * stride_x
-                ch = frame[y : y + chunk_h, x : x + chunk_w, :]
-                if ch.shape[0] != chunk_h or ch.shape[1] != chunk_w:
-                    # przycięcie na końcu
+                ch = frame[y:y+chunk_h, x:x+chunk_w, :]
+                if ch.shape[:2] != (chunk_h, chunk_w):
                     pad = np.zeros((chunk_h, chunk_w, 3), dtype=np.uint8)
-                    pad[: ch.shape[0], : ch.shape[1], :] = ch
+                    pad[:ch.shape[0], :ch.shape[1], :] = ch
                     ch = pad
                 chunks.append(ch)
 
-                # rogi jak u Piotra
                 flags = 0
-                if hx == 0:
-                    flags |= 1  # left
-                if hx == hor_chunks - 1:
-                    flags |= 2  # right
-                if hy == 0:
-                    flags |= 4  # up
-                if hy == ver_chunks - 1:
-                    flags |= 8  # bottom
+                if hx == 0:               flags |= 1   # L
+                if hx == hor_chunks - 1:  flags |= 2   # R
+                if hy == 0:               flags |= 4   # U
+                if hy == ver_chunks - 1:  flags |= 8   # B
 
                 coords.append((y, x))
                 corners.append(flags)
-                # w AI wszystkie intra, w RA niekoniecznie -> tu można później dołożyć z decode.log
                 is_intra.append(1 if seq["profile"] == "AI" else 0)
 
-        chunks = np.stack(chunks, axis=0)  # (N, H, W, 3)
-        chunks = np.transpose(chunks, (0, 3, 1, 2))  # (N, 3, H, W)
-        chunks_t = torch.from_numpy(chunks.astype(np.uint8))
-        coords_t = torch.tensor(coords, dtype=torch.int32)
-        corners_t = torch.tensor(corners, dtype=torch.uint8)
-        intra_t = torch.tensor(is_intra, dtype=torch.uint8)
-
-        out_path = os.path.join(out_seq_dir, f"chunks_poc{poc:03d}.pt")
+        chunks = np.transpose(np.stack(chunks, 0), (0, 3, 1, 2))  # (N,3,H,W)
         torch.save(
             {
                 "seq_meta": {
@@ -310,15 +310,16 @@ def save_chunks_for_decoded(seq, data_root, out_root, chunk_w=132, chunk_h=132, 
                     "sao": int(seq["sao"]),
                     "width": width,
                     "height": height,
+                    "bitdepth": 10 if use_16bit else 8,
                 },
                 "poc": poc,
                 "chunk_size": (chunk_h, chunk_w),
-                "chunks": chunks_t,
-                "coords": coords_t,
-                "corner_flags": corners_t,
-                "is_intra": intra_t,
+                "chunks": torch.from_numpy(chunks.astype(np.uint8)),
+                "coords": torch.tensor(coords, dtype=torch.int32),
+                "corner_flags": torch.tensor(corners, dtype=torch.uint8),
+                "is_intra": torch.tensor(is_intra, dtype=torch.uint8),
             },
-            out_path,
+            os.path.join(out_seq_dir, f"chunks_poc{poc:03d}.pt"),
         )
 
 
