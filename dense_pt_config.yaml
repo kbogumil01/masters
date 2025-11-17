@@ -1,0 +1,103 @@
+# Config for DenseNet training on .pt chunks with VVC fused_maps
+
+test_full_frames: false
+
+# Dataset configuration for .pt format
+dataset:
+  train:
+    chunks_pt_root: /mnt/d/data_mgr/chunks_pt
+    orig_pt_root: /mnt/d/data_mgr/orig_chunks_pt
+    fused_maps_root: /mnt/d/data_mgr/decoded
+    chunk_width: 132
+    chunk_height: 132
+    chunk_border: 2
+  val:
+    chunks_pt_root: /mnt/d/data_mgr/chunks_pt
+    orig_pt_root: /mnt/d/data_mgr/orig_chunks_pt
+    fused_maps_root: /mnt/d/data_mgr/decoded
+    chunk_width: 132
+    chunk_height: 132
+    chunk_border: 2
+  test:
+    chunks_pt_root: /mnt/d/data_mgr/chunks_pt
+    orig_pt_root: /mnt/d/data_mgr/orig_chunks_pt
+    fused_maps_root: /mnt/d/data_mgr/decoded
+    chunk_width: 132
+    chunk_height: 132
+    chunk_border: 2
+
+# Dataloader configuration
+dataloader:
+  batch_size: 32
+  val_batch_size: 32
+  test_batch_size: 32
+  n_step: 2000
+  val_n_step: 400
+  test_n_step: 100
+
+# Trainer configuration
+trainer:
+  mode: enhancer
+  precision: 16-mixed
+  channels_grad_scales: [0.66666, 0.16667, 0.16667]
+  enhancer:
+    epochs: 50
+    enhancer_lr: 0.0002
+    enhancer_scheduler: true
+    enhancer_scheduler_gamma: 0.5
+    enhancer_scheduler_milestones: [15, 30, 40]
+    saved_chunk_folder: enhanced/dense_pt
+
+# Enhancer network configuration
+enhancer:
+  implementation: dense
+  save_to: 'checkpoints/dense_pt_vvc.pth'
+  bn_size: 1.5
+  metadata_size: 4
+  metadata_features: 4
+  features:
+    kernel_size: 7
+    padding: 3
+    stride: 1
+    features: 64
+    pool: false
+    dense: true
+  structure:
+    blocks:
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        features: 64
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 48
+        transition:
+          mode: same
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 32
+        transition:
+          mode: same
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    features: 3
+    tanh: false
+
+# Discriminator (not used in enhancer-only mode, but required by config)
+discriminator:
+  implementation: dense
+  features:
+    features: 16
+  structure:
+    blocks:
+      - features: 32
+      - features: 64
+  classifier:
+    features: 1
+    sigmoid: false

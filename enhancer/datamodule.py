@@ -3,44 +3,58 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 import pytorch_lightning as pl
-from .config import DataloaderConfig, DatasetConfig
 
-from .dataset import VVCDataset, FrameDataset
-from .dataset_npz import VVCDatasetNPZ, get_vvc_dataset
+from .config import DataloaderConfig, DatasetConfig
+from .dataset import FrameDataset          # do ew. testów na pełnych klatkach
+from .dataset_pt import VVCChunksPTDataset  # NOWY dataset .pt
+
+
+def custom_collate(batch):
+    """
+    Custom collate function for VVCChunksPTDataset.
+    Dataset returns: (dec_chunk, orig_chunk, metadata, chunk_obj, vvc_features)
+    where chunk_obj can be None during training (not needed).
+    """
+    # Unpack batch items
+    dec_chunks = []
+    orig_chunks = []
+    metadata = []
+    chunk_objs = []
+    vvc_features = []
+    
+    for item in batch:
+        dec_chunks.append(item[0])
+        orig_chunks.append(item[1])
+        metadata.append(item[2])
+        chunk_objs.append(item[3])  # Keep it even if None
+        vvc_features.append(item[4])
+    
+    # Stack tensors
+    dec_chunks = torch.stack(dec_chunks, dim=0)
+    orig_chunks = torch.stack(orig_chunks, dim=0)
+    metadata = torch.stack(metadata, dim=0)
+    vvc_features = torch.stack(vvc_features, dim=0)
+    
+    # chunk_objs is a list (not stacked - can contain None or dicts)
+    return dec_chunks, orig_chunks, metadata, chunk_objs, vvc_features
 
 
 class LoaderWrapper:
-    """LoaderWrapper."""
+    """Ogranicza licznik kroków na epokę (tak jak u Piotra)."""
 
     def __init__(self, dataloader: DataLoader, n_step: int):
-        """__init__.
-
-        :param dataloader:
-        :type dataloader: DataLoader
-        :param n_step:
-        :type n_step: int
-        """
         self.n_step = n_step
         self.idx = 0
         self.dataloader = dataloader
         self.iter_loader = iter(dataloader)
 
-    def __iter__(self) -> "LoaderWrapper":
-        """__iter__.
-
-        :rtype: "LoaderWrapper"
-        """
+    def __iter__(self):
         return self
 
-    def __len__(self) -> int:
-        """__len__.
-
-        :rtype: int
-        """
+    def __len__(self):
         return self.n_step
 
     def __next__(self):
-        """__next__."""
         if self.idx == self.n_step:
             self.idx = 0
             raise StopIteration
@@ -55,135 +69,122 @@ class LoaderWrapper:
 
 
 class VVCDataModule(pl.LightningDataModule):
-    """VVCDataModule."""
-
     def __init__(
         self,
         dataset_config: DatasetConfig,
         dataloader_config: DataloaderConfig,
         test_full_frames: bool = False,
-        fused_maps_dir: str = None,  # NEW: Path to fused maps
+        fused_maps_dir: str | None = None,  # ← DODANE, żeby nie gryzło się z __main__.py
     ):
-        """__init__.
-
-        :param chunk_folder:
-        :type chunk_folder: str
-        :param orig_chunk_folder:
-        :type orig_chunk_folder: str
-        :param chunk_height:
-        :type chunk_height: int
-        :param chunk_width:
-        :type chunk_width: int
-        :param batch_size:
-        :type batch_size: int
-        :param fused_maps_dir:
-        :type fused_maps_dir: str
-        """
         super().__init__()
         self.config = dataloader_config
         self.dataset_config = dataset_config
-        self.fused_maps_dir = fused_maps_dir  # NEW
 
+        self.dataset_train = None
         self.dataset_val = None
         self.dataset_test = None
-        self.dataset_train = None
+
         self.test_full_frames = test_full_frames
 
+        # fused_maps_dir tu w zasadzie ignorujemy,
+        # bo i tak korzystamy z dataset_config.*.fused_maps_root
+        self._legacy_fused_maps_dir = fused_maps_dir
+
+    # ------------- pomocnicze „fabryki” datasetów .pt -------------
+
+    def _make_pt_dataset(self, split: str):
+        """Tworzy VVCChunksPTDataset dla danego splitu."""
+        ds_cfg = getattr(self.dataset_config, split)
+
+        # Use orig_chunks_pt_root if available, fallback to orig_pt_root
+        orig_root = ds_cfg.orig_chunks_pt_root or ds_cfg.orig_pt_root
+
+        return VVCChunksPTDataset(
+            decoded_root=ds_cfg.chunks_pt_root,
+            orig_root=orig_root,
+            fused_root=ds_cfg.fused_maps_root,
+            chunk_h=ds_cfg.chunk_height,
+            chunk_w=ds_cfg.chunk_width,
+            border=ds_cfg.chunk_border,
+        )
+
+    # ------------- Lightning hooks -------------
+
     def setup(self, stage=None):
-        """setup.
-
-        :param stage:
-        """
-        if stage == "fit":
-            self.dataset_train = get_vvc_dataset(
-                settings=self.dataset_config.train,
-                chunk_transform=self.chunk_transform(),
-                metadata_transform=self.metadata_transform(),
-                fused_maps_dir=self.fused_maps_dir,  # NEW
-                split='train',  # NEW: train split
-            )
-
+        # TRAIN + VAL
+        if stage == "fit" or stage is None:
+            # train
+            self.dataset_train = self._make_pt_dataset("train")
             epochs_for_real_one = len(self.dataset_train) / self.config.n_step
-            print(f"it takes {epochs_for_real_one} of training to reach one real epoch")
+            print(f"[DataModule] it takes {epochs_for_real_one} pseudo-epochs (train) to see all data once")
 
-            self.dataset_val = get_vvc_dataset(
-                settings=self.dataset_config.val,
-                chunk_transform=self.chunk_transform(),
-                metadata_transform=self.metadata_transform(),
-                fused_maps_dir=self.fused_maps_dir,  # NEW
-                split='val',  # NEW: validation split
-            )
+            # val
+            self.dataset_val = self._make_pt_dataset("val")
+            epochs_for_real_one_val = len(self.dataset_val) / self.config.val_n_step
+            print(f"[DataModule] it takes {epochs_for_real_one_val} pseudo-epochs (val) to see all data once")
 
-            epochs_for_real_one = len(self.dataset_val) / self.config.val_n_step
-            print(
-                f"it takes {epochs_for_real_one} of validation to reach one real epoch"
-            )
-
+        # TEST / PREDICT
         if stage in ("test", "predict"):
             if self.test_full_frames:
+                # jeśli kiedyś będziesz chciał test na pełnych klatkach (PNG) – nadal zostawiam
                 self.dataset_test = FrameDataset(
                     settings=self.dataset_config.test,
                     chunk_transform=self.chunk_transform(),
                     metadata_transform=self.metadata_transform(),
                 )
             else:
-                self.dataset_test = get_vvc_dataset(
-                    settings=self.dataset_config.test,
-                    chunk_transform=self.chunk_transform(),
-                    metadata_transform=self.metadata_transform(),
-                    fused_maps_dir=self.fused_maps_dir,  # NEW
-                    split='test',  # NEW: test split
-                )
+                # standardowo: test na chunkach .pt
+                self.dataset_test = self._make_pt_dataset("test")
+
+    # ------------- dataloadery -------------
 
     def train_dataloader(self):
-        """train_dataloader - RESTORED: Use LoaderWrapper like Piotr."""
-        data_loader = DataLoader(
+        dl = DataLoader(
             self.dataset_train,
             batch_size=self.config.batch_size,
             shuffle=True,
-            pin_memory=False,  # RESTORED: Like Piotr
-            num_workers=1,     # CHANGED: Single worker to prevent swap thrashing
-            persistent_workers=False,  # Not needed with 1 worker
+            pin_memory=False,
+            num_workers=1,
+            persistent_workers=False,
             prefetch_factor=2,
+            collate_fn=custom_collate,
         )
-        # RESTORED LoaderWrapper - quick epochs like Piotr!
-        return LoaderWrapper(
-            data_loader,
-            self.config.n_step,
-        )
+        return LoaderWrapper(dl, self.config.n_step)
 
-    def test_dataloader(self, shuffle=False):
-        """test_dataloader."""
-        data_loader = DataLoader(
+    def val_dataloader(self):
+        dl = DataLoader(
+            self.dataset_val,
+            batch_size=self.config.val_batch_size,
+            shuffle=True,
+            pin_memory=False,
+            num_workers=1,
+            persistent_workers=False,
+            prefetch_factor=2,
+            collate_fn=custom_collate,
+        )
+        return LoaderWrapper(dl, self.config.val_n_step)
+
+    def test_dataloader(self, shuffle: bool = False):
+        # Use custom_collate only for chunks_pt dataset, not for FrameDataset
+        collate_fn = None if self.test_full_frames else custom_collate
+        
+        dl = DataLoader(
             self.dataset_test,
             batch_size=self.config.test_batch_size if not self.test_full_frames else 1,
             shuffle=shuffle,
             pin_memory=True,
-            num_workers=2,  # Reduced from os.cpu_count()
+            num_workers=2,
+            collate_fn=collate_fn,
         )
-        return data_loader
+        return dl
 
     def predict_dataloader(self):
-        return self.test_dataloader(True)
+        return self.test_dataloader(shuffle=True)
 
-    def val_dataloader(self):
-        """val_dataloader."""
-        data_loader = DataLoader(
-            self.dataset_val,
-            batch_size=self.config.val_batch_size,
-            shuffle=True,
-            pin_memory=False,  # DISABLED - causes VRAM bloat during sanity check
-            num_workers=1,  # Single worker for stability
-            persistent_workers=False,
-            prefetch_factor=2,
-        )
-        return LoaderWrapper(
-            data_loader,
-            self.config.val_n_step,
-        )
+    # ------------- transformy (używane tylko przez FrameDataset) -------------
 
     def chunk_transform(self):
-        """chunk_transform."""
+        # dla FrameDataset (PNG); VVCChunksPTDataset już zwraca tensory
         transform = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -192,9 +193,6 @@ class VVCDataModule(pl.LightningDataModule):
         return transform
 
     def metadata_transform(self):
-        """metadata_transform."""
-
         def transform(metadata):
             return torch.as_tensor(metadata).float().view(len(metadata), 1, 1)
-
         return transform

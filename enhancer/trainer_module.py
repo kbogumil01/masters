@@ -1,3 +1,4 @@
+import os
 import torch
 import wandb
 import pytorch_lightning as pl
@@ -6,9 +7,10 @@ import numpy as np
 from torchmetrics.functional import peak_signal_noise_ratio as psnr
 from torchmetrics.functional import structural_similarity_index_measure as ssim
 from torchmetrics.functional.classification import accuracy
+
 from .ssim import SSIM, MS_SSIM
 from .config import TrainerConfig, TrainingMode
-from .dataset import VVCDataset, FrameDataset
+from .dataset import FrameDataset  # tylko do zapisu pełnych klatek w predict_step
 
 
 class TrainerModule(pl.LightningModule):
@@ -43,8 +45,8 @@ class TrainerModule(pl.LightningModule):
         self.probe = self.config.probe
 
         self.num_samples = self.config.num_samples
-        
-        # SSIM modules - EXACTLY like Piotr (per_channel=True, channel=3)
+
+        # SSIM modules - jak u Piotra (per_channel=True, channel=3)
         self.ssim = SSIM(data_range=1.0, win_size=9, channel=3, per_channel=True)
         self.msssim = MS_SSIM(data_range=1.0, win_size=9, channel=3, per_channel=True)
 
@@ -55,7 +57,8 @@ class TrainerModule(pl.LightningModule):
         return self.enhancer(chunks, metadata, vvc_features)
 
     def adversarial_loss(self, y_hat, y):
-        return F.binary_cross_entropy(y_hat, y)
+        # BCE z logitami – bezpieczne przy AMP
+        return F.binary_cross_entropy_with_logits(y_hat, y)
 
     def what_to_train(self):
         if self.mode == TrainingMode.ENHANCER:
@@ -74,29 +77,26 @@ class TrainerModule(pl.LightningModule):
 
             return bool(e_train), bool(d_train)
 
-        return True, True
-
     def g_step(self, chunks, orig_chunks, metadata, vvc_features=None, stage="train"):
         enhanced = self(chunks, metadata, vvc_features)
-
         prefix = "" if stage == "train" else stage + "_"
 
-        # ground truth result (ie: all fake)
-        # put on GPU because we created this tensor inside training_loop
-        valid = torch.ones(chunks.size(0), 1)
-        valid = valid.type_as(chunks)
+        # label dla GAN
+        valid = torch.ones(chunks.size(0), 1, device=chunks.device, dtype=chunks.dtype)
 
-        # split channels FIRST (needed for per-channel SSIM/MS-SSIM)
+        # rozdzielenie kanałów
         eY, eU, eV = enhanced[:, [0]], enhanced[:, [1]], enhanced[:, [2]]
         oY, oU, oV = orig_chunks[:, [0]], orig_chunks[:, [1]], orig_chunks[:, [2]]
 
-        # Channels grad scales as tensor (no gradients needed - just weights)
-        channels_grad_scales = torch.tensor(self.channels_grad_scales, 
-                                           device=enhanced.device, dtype=enhanced.dtype)
+        channels_grad_scales = torch.tensor(
+            self.channels_grad_scales,
+            device=enhanced.device,
+            dtype=enhanced.dtype,
+        )
 
-        # EXACTLY like Piotr: per_channel=True returns 3-element tensor!
-        ssim_l = 1 - self.ssim(orig_chunks, enhanced)
-        ssimY, ssimU, ssimV = ssim_l  # Unpacking per-channel results
+        # SSIM per-channel (3 wartości)
+        ssim_l = 1 - self.ssim(orig_chunks, enhanced)  # (3,)
+        ssimY, ssimU, ssimV = ssim_l
         ssim_loss = (channels_grad_scales * ssim_l).sum()
 
         self.log(f"{prefix}g_ssimY_loss", ssimY, prog_bar=False)
@@ -105,7 +105,7 @@ class TrainerModule(pl.LightningModule):
         self.log(f"{prefix}g_ssim_loss", ssim_loss, prog_bar=False)
         self.log(f"{prefix}g_ssim", ssim_l.mean(), prog_bar=False)
 
-        # MS-SSIM exactly like Piotr
+        # MS-SSIM
         msssim_l = 1 - self.msssim(orig_chunks, enhanced)
         msssimY, msssimU, msssimV = msssim_l
         msssim_loss = (channels_grad_scales * msssim_l).sum()
@@ -116,7 +116,7 @@ class TrainerModule(pl.LightningModule):
         self.log(f"{prefix}g_msssim_loss", msssim_loss, prog_bar=False)
         self.log(f"{prefix}g_msssim", msssim_l.mean(), prog_bar=False)
 
-        # MSE/L1 per channel (keep Piotr's approach with torch.stack)
+        # MSE per-channel
         mseY = F.mse_loss(oY, eY)
         mseU = F.mse_loss(oU, eU)
         mseV = F.mse_loss(oV, eV)
@@ -127,6 +127,7 @@ class TrainerModule(pl.LightningModule):
         self.log(f"{prefix}g_mseU_loss", mseU, prog_bar=False)
         self.log(f"{prefix}g_mseV_loss", mseV, prog_bar=False)
 
+        # L1 per-channel
         l1Y = F.l1_loss(oY, eY)
         l1U = F.l1_loss(oU, eU)
         l1V = F.l1_loss(oV, eV)
@@ -137,15 +138,16 @@ class TrainerModule(pl.LightningModule):
         self.log(f"{prefix}g_l1U_loss", l1U, prog_bar=False)
         self.log(f"{prefix}g_l1V_loss", l1V, prog_bar=False)
 
+        # GAN vs enhancer-only
         if (
             self.mode == TrainingMode.GAN
             and self.current_epoch > self.separation_epochs
         ):
             preds = self.discriminator(enhanced)
             gd_loss = self.adversarial_loss(preds, valid)
-            # GAN mode: Piotr's full loss with MS-SSIM
+
             g_loss = (
-                0.08 * msssim_loss  # MS-SSIM (GAN only)
+                0.08 * msssim_loss
                 + 0.08 * ssim_loss
                 + 0.29 * mse_loss
                 + 0.45 * l1_loss
@@ -156,9 +158,7 @@ class TrainerModule(pl.LightningModule):
             self.enhancer_losses = self.enhancer_losses[: self.probe]
         else:
             preds = None
-            # Enhancer-only mode: Piotr's baseline loss
-            # L = α1·L1 + α2·L2 + α3·(1-SSIM)
-            # Balanced weights (sum=1.0): α1=0.5, α2=0.3, α3=0.2
+            # wariant "tylko enhancer" (bez GAN)
             g_loss = 0.5 * l1_loss + 0.3 * mse_loss + 0.2 * ssim_loss
 
         self.log(f"{prefix}g_loss", g_loss, prog_bar=True)
@@ -166,14 +166,8 @@ class TrainerModule(pl.LightningModule):
         if stage != "train":
             cY, cU, cV = chunks[:, [0]], chunks[:, [1]], chunks[:, [2]]
 
-            enhanced_psnr = psnr(
-                enhanced,
-                orig_chunks,
-            )
-            orig_psnr = psnr(
-                chunks,
-                orig_chunks,
-            )
+            enhanced_psnr = psnr(enhanced, orig_chunks)
+            orig_psnr = psnr(chunks, orig_chunks)
 
             epsnrY = psnr(eY, oY)
             epsnrU = psnr(eU, oU)
@@ -183,14 +177,9 @@ class TrainerModule(pl.LightningModule):
             cpsnrU = psnr(cU, oU)
             cpsnrV = psnr(cV, oV)
 
-            enhanced_ssim = ssim(
-                enhanced,
-                orig_chunks,
-            )
-            orig_ssim = ssim(
-                chunks,
-                orig_chunks,
-            )
+            enhanced_ssim = ssim(enhanced, orig_chunks)
+            orig_ssim = ssim(chunks, orig_chunks)
+
             self.log_dict(
                 {
                     f"{prefix}psnr": enhanced_psnr,
@@ -211,23 +200,17 @@ class TrainerModule(pl.LightningModule):
     def d_step(self, fake_chunks, orig_chunks, stage="train"):
         prefix = "" if stage == "train" else stage + "_"
 
-        valid = torch.ones(orig_chunks.size(0), 1)
-        valid = valid.type_as(orig_chunks)
+        valid = torch.ones(orig_chunks.size(0), 1, device=orig_chunks.device, dtype=orig_chunks.dtype)
         real_pred = self.discriminator(orig_chunks)
         real_loss = self.adversarial_loss(real_pred, valid)
         real_accuracy = accuracy(real_pred, valid, task="binary")
 
-        # how well can it label as fake?
-        fake = torch.zeros(orig_chunks.size(0), 1)
-        fake = fake.type_as(orig_chunks)
-
+        fake = torch.zeros(orig_chunks.size(0), 1, device=orig_chunks.device, dtype=orig_chunks.dtype)
         fake_preds = self.discriminator(fake_chunks)
         fake_loss = self.adversarial_loss(fake_preds, fake)
         fake_accuracy = accuracy(fake_preds, fake, task="binary")
 
         acc = (real_accuracy + fake_accuracy) / 2
-
-        # discriminator loss is the average of these
         d_loss = (real_loss + fake_loss) / 2
 
         self.discriminator_losses.append(d_loss.item())
@@ -245,31 +228,33 @@ class TrainerModule(pl.LightningModule):
     def log_images(
         self, enhanced, chunks, orig_chunks, preds, real_preds, stage="train"
     ):
-        # Skip logging if no logger available (wandb disabled)
-        if (not hasattr(self.logger, 'experiment') or 
-            self.logger is None or 
-            not hasattr(self.logger.experiment, 'log')):
+        # brak loggera -> nic nie robimy
+        if (
+            self.logger is None
+            or not hasattr(self.logger, "experiment")
+            or not hasattr(self.logger.experiment, "log")
+        ):
             return
-            
+
         prefix = "" if stage == "train" else stage + "_"
 
         log = {"uncompressed": [], "decompressed": []}
-
-        if self.mode != TrainingMode.DISCRIMINATOR:
+        if self.mode != TrainingMode.DISCRIMINATOR and enhanced is not None:
             log["enhanced"] = []
 
         actual_samples = min(self.num_samples, orig_chunks.size(0))
+
         for i in range(actual_samples):
             orig = orig_chunks[i].cpu()
             dec = chunks[i].cpu()
 
-            if self.mode != TrainingMode.DISCRIMINATOR:
+            if self.mode != TrainingMode.DISCRIMINATOR and enhanced is not None:
                 enh = enhanced[i].cpu()
                 log["enhanced"].append(
                     wandb.Image(
                         enh,
                         caption=f"Pred: {preds[i].item()}"
-                        if self.mode == TrainingMode.GAN
+                        if self.mode == TrainingMode.GAN and preds is not None
                         else f"ENH: {i}",
                     )
                 )
@@ -278,7 +263,7 @@ class TrainerModule(pl.LightningModule):
                 wandb.Image(
                     orig,
                     caption=f"Pred: {real_preds[i].item()}"
-                    if self.mode != TrainingMode.ENHANCER
+                    if self.mode != TrainingMode.ENHANCER and real_preds is not None
                     else f"UNC: {i}",
                 )
             )
@@ -287,7 +272,7 @@ class TrainerModule(pl.LightningModule):
                 wandb.Image(
                     dec,
                     caption=f"Pred: {preds[i].item()}"
-                    if self.mode == TrainingMode.DISCRIMINATOR
+                    if self.mode == TrainingMode.DISCRIMINATOR and preds is not None
                     else f"DEC: {i}",
                 )
             )
@@ -297,35 +282,30 @@ class TrainerModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         g_opt, d_opt = self.optimizers()
+        # trening ZAWSZE na chunks_pt -> batch ma 5 elementów
         chunks, orig_chunks, metadata, _, vvc_features = batch
+
         e_train, d_train = self.what_to_train()
         preds = None
 
-        # train ENHANCE!
-        # ENHANCE!
+        # ENHANCER
         if e_train:
-            # with gradient
             g_opt.zero_grad()
-
             enhanced, preds, g_loss = self.g_step(chunks, orig_chunks, metadata, vvc_features)
             fake_chunks = enhanced.detach()
-
             self.manual_backward(g_loss)
             g_opt.step()
         elif e_train is not None:
-            # just log enhancer loss
             enhanced, preds, g_loss = self.g_step(chunks, orig_chunks, metadata, vvc_features)
             fake_chunks = enhanced.detach()
         else:
             fake_chunks = chunks
             enhanced = None
 
-        # train discriminator
+        # DISCRIMINATOR
         if d_train:
             d_opt.zero_grad()
-
             fake_preds, real_preds, d_loss = self.d_step(fake_chunks, orig_chunks)
-
             self.manual_backward(d_loss)
             d_opt.step()
         elif d_train is not None:
@@ -334,7 +314,7 @@ class TrainerModule(pl.LightningModule):
             real_preds = None
             fake_preds = preds
 
-        if batch_idx % 1000 == 0:  # ← Changed from 100 to 1000 (10x less frequent)
+        if batch_idx % 1000 == 0:
             self.log_images(
                 enhanced,
                 chunks,
@@ -345,31 +325,41 @@ class TrainerModule(pl.LightningModule):
 
     def on_train_epoch_end(self):
         schs = self.lr_schedulers()
-
         if schs is None:
             return
-
         if not isinstance(schs, (tuple, list)):
             schs = [schs]
-
         for sch in schs:
             sch.step()
 
+    def _unpack_batch_for_eval(self, batch):
+        """
+        Test/val/predict: batch może mieć:
+        - 5 elementów (chunks_pt z VVC features)
+        - 4 elementy (FrameDataset gdy test_full_frames=True)
+        """
+        if self.test_full_frames:
+            # FrameDataset: (chunks, orig_chunks, metadata, chunk_objs)
+            chunks, orig_chunks, metadata, chunk_objs = batch
+            vvc_features = None
+        else:
+            # VVCChunksPTDataset: (chunks, orig_chunks, metadata, chunk_objs, vvc_features)
+            chunks, orig_chunks, metadata, chunk_objs, vvc_features = batch
+        return chunks, orig_chunks, metadata, chunk_objs, vvc_features
+
     def validation_step(self, batch, batch_idx):
-        chunks, orig_chunks, metadata, _, vvc_features = batch
+        chunks, orig_chunks, metadata, _, vvc_features = self._unpack_batch_for_eval(batch)
         preds = None
 
-        # train ENHANCE!
-        # ENHANCE!
         if self.mode != TrainingMode.DISCRIMINATOR:
-            # with gradient
-            enhanced, preds, g_loss = self.g_step(chunks, orig_chunks, metadata, vvc_features, "val")
+            enhanced, preds, g_loss = self.g_step(
+                chunks, orig_chunks, metadata, vvc_features, "val"
+            )
             fake_chunks = enhanced.detach()
         else:
             fake_chunks = chunks
             enhanced = None
 
-        # train discriminator
         if self.mode != TrainingMode.ENHANCER:
             fake_preds, real_preds, d_loss = self.d_step(
                 fake_chunks, orig_chunks, "val"
@@ -378,7 +368,7 @@ class TrainerModule(pl.LightningModule):
             real_preds = None
             fake_preds = preds
 
-        if batch_idx % 1000 == 0:  # Log images less frequently
+        if batch_idx % 1000 == 0:
             self.log_images(
                 enhanced,
                 chunks,
@@ -389,20 +379,18 @@ class TrainerModule(pl.LightningModule):
             )
 
     def test_step(self, batch, batch_idx):
-        chunks, orig_chunks, metadata, _, vvc_features = batch
+        chunks, orig_chunks, metadata, _, vvc_features = self._unpack_batch_for_eval(batch)
         preds = None
 
-        # train ENHANCE!
-        # ENHANCE!
         if self.mode != TrainingMode.DISCRIMINATOR:
-            # with gradient
-            enhanced, preds, g_loss = self.g_step(chunks, orig_chunks, metadata, vvc_features, "test")
+            enhanced, preds, g_loss = self.g_step(
+                chunks, orig_chunks, metadata, vvc_features, "test"
+            )
             fake_chunks = enhanced.detach()
         else:
             fake_chunks = chunks
             enhanced = None
 
-        # train discriminator
         if self.mode != TrainingMode.ENHANCER:
             fake_preds, real_preds, d_loss = self.d_step(
                 fake_chunks, orig_chunks, "test"
@@ -422,21 +410,35 @@ class TrainerModule(pl.LightningModule):
             )
 
     def predict_step(self, batch, batch_idx):
-        chunks, _, metadata, chunk_objs, vvc_features = batch
-
-        # ENHANCE!
+        chunks, _, metadata, chunk_objs, vvc_features = self._unpack_batch_for_eval(batch)
         enhanced = self(chunks, metadata, vvc_features)
 
-        for i, chunk_data in enumerate(enhanced):
-            chunk = [c[i].cpu() if hasattr(c[i], "cpu") else c[i] for c in chunk_objs]
-            if self.test_full_frames:
+        save_root = getattr(self.config, "saved_chunk_folder", None)
+        if save_root is None:
+            # nic nie zapisujemy, ale zwracamy wyniki
+            return enhanced.detach().cpu()
+
+        os.makedirs(save_root, exist_ok=True)
+
+        if self.test_full_frames:
+            # zapis pełnych klatek zgodnie z FrameDataset.save_frame
+            for i, frame_data in enumerate(enhanced):
+                meta_i = [
+                    c[i].cpu() if hasattr(c[i], "cpu") else c[i]
+                    for c in chunk_objs
+                ]
                 FrameDataset.save_frame(
-                    chunk, chunk_data.cpu().numpy(), self.config.saved_chunk_folder
+                    meta_i, frame_data.cpu().numpy(), save_root
                 )
-            else:
-                VVCDataset.save_chunk(
-                    chunk, chunk_data.cpu().numpy(), self.config.saved_chunk_folder
+        else:
+            # prosty zapis jako .npy – możesz później dopiąć dokładne nazwy jak u Piotra
+            for i, chunk_data in enumerate(enhanced):
+                out_path = os.path.join(
+                    save_root, f"chunk_{batch_idx:05d}_{i:03d}.npy"
                 )
+                np.save(out_path, chunk_data.detach().cpu().numpy())
+
+        return None
 
     def configure_optimizers(self):
         opt_g = torch.optim.Adam(

@@ -88,7 +88,7 @@ if __name__ == "__main__":
         precision=config.trainer.precision,  # NEW: Support mixed precision from config
         limit_train_batches=config.trainer.limit_train_batches,  # NEW: Limit training data
         limit_val_batches=config.trainer.limit_val_batches,  # NEW: Limit validation data
-        # num_sanity_val_steps=0,  # Re-enabled - should work now with fixed dataloader
+        num_sanity_val_steps=0,  # Skip sanity check - dataloader is verified
         callbacks=[
             TQDMProgressBar(refresh_rate=20),
             LearningRateMonitor(logging_interval="step"),

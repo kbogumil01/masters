@@ -15,10 +15,20 @@ class DataloaderConfig(BaseModel):
 
 
 class SubDatasetConfig(BaseModel):
-    chunk_folder: str = "chunks"
-    orig_chunk_folder: str = "orig_chunks"
-    chunk_height: int = 132
+    chunks_root: str | None = None
+    orig_root: str | None = None
+    fused_maps_root: str | None = None
+    vvc_maps_root: str | None = None
+    chunks_pt_root: str | None = None
+    orig_pt_root: str | None = None
+    orig_chunks_pt_root: str | None = None  # alias for orig_pt_root
+    fused_maps_pt_root: str | None = None
     chunk_width: int = 132
+    chunk_height: int = 132
+    chunk_border: int = 2
+    limit: int | None = None
+    use_cache: bool = False
+    cache_path: str | None = None
 
 
 class NetworkImplementation(Enum):

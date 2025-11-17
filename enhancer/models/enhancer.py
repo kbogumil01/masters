@@ -36,11 +36,13 @@ class MetadataEncoder(nn.Module):
 
 class VVCFeatureEncoder(nn.Module):
     """
-    Encoder for VVC intelligence features (13 channels)
-    Processes dequant coefficients, boundaries, and enhanced features
+    Encoder for VVC intelligence features (6 channels)
+    Processes dequant coefficients and boundaries:
+    - y_ac_energy, y_nz_density, y_dc (3 channels from dequant)
+    - boundary_bin, boundary_weight, size_map_norm (3 channels from boundaries)
     """
     
-    def __init__(self, in_channels: int = 13, out_channels: int = 16):
+    def __init__(self, in_channels: int = 6, out_channels: int = 16):
         super().__init__()
         
         # Lightweight encoder to compress VVC features
@@ -59,7 +61,7 @@ class VVCFeatureEncoder(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """
         Args:
-            x: VVC features (B, 13, H, W)
+            x: VVC features (B, 6, H, W)
         Returns:
             Processed VVC features (B, 16, H, W)
         """
@@ -88,7 +90,7 @@ class Enhancer(nn.Module):
 
         # NEW: VVC Feature Encoder
         self.vvc_encoder = VVCFeatureEncoder(
-            in_channels=13,   # 13 VVC intelligence channels
+            in_channels=6,   # 6 VVC channels: y_ac_energy, y_nz_density, y_dc, boundary_bin, boundary_weight, size_map_norm
             out_channels=16,  # Compressed VVC features
         )
 
