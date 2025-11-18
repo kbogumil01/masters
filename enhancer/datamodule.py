@@ -139,27 +139,22 @@ class VVCDataModule(pl.LightningDataModule):
     # ------------- dataloadery -------------
 
     def train_dataloader(self):
-        dl = DataLoader(
+        return DataLoader(
             self.dataset_train,
             batch_size=self.config.batch_size,
             shuffle=True,
+            num_workers=4,
             pin_memory=False,
-            num_workers=1,
-            persistent_workers=False,
-            prefetch_factor=2,
             collate_fn=custom_collate,
         )
-        return LoaderWrapper(dl, self.config.n_step)
 
     def val_dataloader(self):
         dl = DataLoader(
             self.dataset_val,
             batch_size=self.config.val_batch_size,
-            shuffle=True,
+            shuffle=False,
+            num_workers=4,
             pin_memory=False,
-            num_workers=1,
-            persistent_workers=False,
-            prefetch_factor=2,
             collate_fn=custom_collate,
         )
         return LoaderWrapper(dl, self.config.val_n_step)

@@ -5,22 +5,22 @@ test_full_frames: false
 # Dataset configuration for .pt format
 dataset:
   train:
-    chunks_pt_root: /mnt/d/data_mgr/chunks_pt
-    orig_pt_root: /mnt/d/data_mgr/orig_chunks_pt
+    chunks_pt_root: /home/karol/mgr/chunks_pt
+    orig_pt_root: /home/karol/mgr/orig_chunks_pt
     fused_maps_root: /mnt/d/data_mgr/decoded
     chunk_width: 132
     chunk_height: 132
     chunk_border: 2
   val:
-    chunks_pt_root: /mnt/d/data_mgr/chunks_pt
-    orig_pt_root: /mnt/d/data_mgr/orig_chunks_pt
+    chunks_pt_root: /home/karol/mgr/chunks_pt
+    orig_pt_root: /home/karol/mgr/orig_chunks_pt
     fused_maps_root: /mnt/d/data_mgr/decoded
     chunk_width: 132
     chunk_height: 132
     chunk_border: 2
   test:
-    chunks_pt_root: /mnt/d/data_mgr/chunks_pt
-    orig_pt_root: /mnt/d/data_mgr/orig_chunks_pt
+    chunks_pt_root: /home/karol/mgr/chunks_pt
+    orig_pt_root: /home/karol/mgr/orig_chunks_pt
     fused_maps_root: /mnt/d/data_mgr/decoded
     chunk_width: 132
     chunk_height: 132
@@ -28,9 +28,9 @@ dataset:
 
 # Dataloader configuration
 dataloader:
-  batch_size: 32
-  val_batch_size: 32
-  test_batch_size: 32
+  batch_size: 64        # ↑ 2x - GPU ma dużo wolnej pamięci (7.5GB free)
+  val_batch_size: 64
+  test_batch_size: 64
   n_step: 2000
   val_n_step: 400
   test_n_step: 100
@@ -38,7 +38,7 @@ dataloader:
 # Trainer configuration
 trainer:
   mode: enhancer
-  precision: 16-mixed
+  precision: "32"  # ← string zamiast int
   channels_grad_scales: [0.66666, 0.16667, 0.16667]
   enhancer:
     epochs: 50
@@ -59,7 +59,7 @@ enhancer:
     kernel_size: 7
     padding: 3
     stride: 1
-    features: 64
+    features: 64       # przywrócone
     pool: false
     dense: true
   structure:

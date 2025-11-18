@@ -208,14 +208,14 @@ class VVCChunksPTDataset(Dataset):
         fmap_path = os.path.join(
             self.fused_root, seq, "fused_maps", f"fused_maps_poc{poc}.pt"
         )
+        
         if not os.path.isfile(fmap_path):
-            # brak map – zero
             return torch.zeros(
                 6, self.chunk_h, self.chunk_w, dtype=torch.float32
             )
 
         d = torch.load(fmap_path, map_location="cpu")
-
+        
         # rozmiar ramki z pierwszego klucza
         sample_key = next(iter(d.keys()))
         h, w = d[sample_key].shape[-2:]
