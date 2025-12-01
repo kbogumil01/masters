@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from pydantic import validate_arguments
+from typing import Optional
 
 from .dense import DenseNet
 from .res import ResNet
@@ -34,40 +35,6 @@ class MetadataEncoder(nn.Module):
         return x
 
 
-class VVCFeatureEncoder(nn.Module):
-    """
-    Encoder for VVC intelligence features (6 channels)
-    Processes dequant coefficients and boundaries:
-    - y_ac_energy, y_nz_density, y_dc (3 channels from dequant)
-    - boundary_bin, boundary_weight, size_map_norm (3 channels from boundaries)
-    """
-    
-    def __init__(self, in_channels: int = 6, out_channels: int = 16):
-        super().__init__()
-        
-        # Lightweight encoder to compress VVC features
-        self.encoder = nn.Sequential(
-            # First conv: spatial analysis of VVC features
-            nn.Conv2d(in_channels, out_channels * 2, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels * 2),
-            nn.ReLU(inplace=True),
-            
-            # Second conv: feature refinement  
-            nn.Conv2d(out_channels * 2, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        )
-    
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        Args:
-            x: VVC features (B, 6, H, W)
-        Returns:
-            Processed VVC features (B, 16, H, W)
-        """
-        return self.encoder(x)
-
-
 class Enhancer(nn.Module):
     """
     Enhancer network
@@ -88,14 +55,13 @@ class Enhancer(nn.Module):
             size=config.input_shape[0],
         )
 
-        # NEW: VVC Feature Encoder
-        self.vvc_encoder = VVCFeatureEncoder(
-            in_channels=6,   # 6 VVC channels: y_ac_energy, y_nz_density, y_dc, boundary_bin, boundary_weight, size_map_norm
-            out_channels=16,  # Compressed VVC features
-        )
-
-        # Total input features: RGB(3) + metadata(4) + VVC(16) = 23 channels
-        num_features = config.metadata_features + config.input_shape[2] + 16
+        # BASELINE: Tu liczymy kanały wejściowe.
+        # input_shape[2] (3 dla RGB/YUV) + metadata_features (4) = 7 kanałów
+        num_features = config.metadata_features + config.input_shape[2]
+        
+        # TODO (Future): Gdy będziesz chciał użyć vvc_features, musisz tu dodać + 6
+        # if config.use_vvc_features:
+        #     num_features += 6
 
         self.model = {
             NetworkImplementation.DENSE: DenseNet,
@@ -106,21 +72,17 @@ class Enhancer(nn.Module):
             initial_features=num_features,
         )
 
-    def forward(self, input_: Tensor, metadata: Tensor, vvc_features: Tensor = None) -> Tensor:
+    def forward(self, input_: Tensor, metadata: Tensor, vvc_features: Optional[Tensor] = None) -> Tensor:
         shape = input_.shape[2:]
         encoded_metadata = self.metadata_encoder(metadata, shape)
         
-        # Process VVC features if available
-        if vvc_features is not None and vvc_features.numel() > 0:
-            encoded_vvc = self.vvc_encoder(vvc_features)
-            # Concatenate: RGB(3) + metadata(4) + VVC(16) = 23 channels
-            data = torch.cat((input_, encoded_metadata, encoded_vvc), 1)
-        else:
-            # Fallback: create zero VVC features for backward compatibility
-            batch_size = input_.size(0)
-            zero_vvc = torch.zeros(batch_size, 16, *shape, device=input_.device, dtype=input_.dtype)
-            data = torch.cat((input_, encoded_metadata, zero_vvc), 1)
-        
+        # BASELINE: Łączymy tylko obraz i metadane
+        data = torch.cat((input_, encoded_metadata), 1)
+
+        # TODO (Future): W przyszłości odkomentuj to dla pełnej fuzji:
+        # if vvc_features is not None:
+        #     data = torch.cat((data, vvc_features), 1)
+
         result = self.model(data)
 
         if self.with_mask:
@@ -135,11 +97,13 @@ if __name__ == "__main__":
     import sys
     from ..config import Config
 
-    config = Config.load(sys.argv[1])
-
+    # Test dummy run
+    config = Config.load("config.yaml") # upewnij się że config istnieje lub zakomentuj
     g = Enhancer(config.enhancer)
-    result = g(torch.rand((1, 3, 132, 132)), torch.rand((1, 6, 1, 1)))
-    print(result.shape)
-
-    summary(g, [(3, 132, 132), (6, 1, 1)], device="cpu", depth=10)
-    # summary(g, [(3, 1920, 1080), (6, 1, 1)], device="cpu", depth=10)
+    # Test z 3 argumentami (symulacja trenera)
+    img = torch.rand((1, 3, 132, 132))
+    meta = torch.rand((1, 4, 1, 1))
+    feats = torch.rand((1, 6, 132, 132))
+    
+    result = g(img, meta, feats)
+    print(f"Output shape: {result.shape}")
