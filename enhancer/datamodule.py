@@ -1,21 +1,17 @@
 import os
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 import pytorch_lightning as pl
 
 from .config import DataloaderConfig, DatasetConfig
-from .dataset import FrameDataset          # do ew. testów na pełnych klatkach
-from .dataset_pt import VVCChunksPTDataset  # NOWY dataset .pt
+from .dataset import FrameDataset, VVCChunksPTDataset
 
 
 def custom_collate(batch):
     """
-    Custom collate function for VVCChunksPTDataset.
-    Dataset returns: (dec_chunk, orig_chunk, metadata, chunk_obj, vvc_features)
-    where chunk_obj can be None during training (not needed).
+    Pakuje dane z datasetu w batche tensorów.
     """
-    # Unpack batch items
     dec_chunks = []
     orig_chunks = []
     metadata = []
@@ -26,22 +22,19 @@ def custom_collate(batch):
         dec_chunks.append(item[0])
         orig_chunks.append(item[1])
         metadata.append(item[2])
-        chunk_objs.append(item[3])  # Keep it even if None
+        chunk_objs.append(item[3])
         vvc_features.append(item[4])
     
-    # Stack tensors
-    dec_chunks = torch.stack(dec_chunks, dim=0)
-    orig_chunks = torch.stack(orig_chunks, dim=0)
-    metadata = torch.stack(metadata, dim=0)
-    vvc_features = torch.stack(vvc_features, dim=0)
-    
-    # chunk_objs is a list (not stacked - can contain None or dicts)
-    return dec_chunks, orig_chunks, metadata, chunk_objs, vvc_features
+    return (
+        torch.stack(dec_chunks, dim=0),
+        torch.stack(orig_chunks, dim=0),
+        torch.stack(metadata, dim=0),
+        chunk_objs,
+        torch.stack(vvc_features, dim=0)
+    )
 
 
 class LoaderWrapper:
-    """Ogranicza licznik kroków na epokę (tak jak u Piotra)."""
-
     def __init__(self, dataloader: DataLoader, n_step: int):
         self.n_step = n_step
         self.idx = 0
@@ -55,12 +48,11 @@ class LoaderWrapper:
         return self.n_step
 
     def __next__(self):
-        if self.idx == self.n_step:
+        if self.idx >= self.n_step:
             self.idx = 0
             raise StopIteration
         else:
             self.idx += 1
-
         try:
             return next(self.iter_loader)
         except StopIteration:
@@ -74,30 +66,24 @@ class VVCDataModule(pl.LightningDataModule):
         dataset_config: DatasetConfig,
         dataloader_config: DataloaderConfig,
         test_full_frames: bool = False,
-        fused_maps_dir: str | None = None,  # ← DODANE, żeby nie gryzło się z __main__.py
+        fused_maps_dir: str | None = None,
     ):
         super().__init__()
         self.config = dataloader_config
         self.dataset_config = dataset_config
-
-        self.dataset_train = None
-        self.dataset_val = None
-        self.dataset_test = None
-
         self.test_full_frames = test_full_frames
-
-        # fused_maps_dir tu w zasadzie ignorujemy,
-        # bo i tak korzystamy z dataset_config.*.fused_maps_root
-        self._legacy_fused_maps_dir = fused_maps_dir
-
-    # ------------- pomocnicze „fabryki” datasetów .pt -------------
+        
+        # --- Tu definiujemy zmienne ---
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
 
     def _make_pt_dataset(self, split: str):
-        """Tworzy VVCChunksPTDataset dla danego splitu."""
         ds_cfg = getattr(self.dataset_config, split)
-
-        # Use orig_chunks_pt_root if available, fallback to orig_pt_root
         orig_root = ds_cfg.orig_chunks_pt_root or ds_cfg.orig_pt_root
+        
+        if not ds_cfg.chunks_pt_root:
+            return None
 
         return VVCChunksPTDataset(
             decoded_root=ds_cfg.chunks_pt_root,
@@ -108,84 +94,82 @@ class VVCDataModule(pl.LightningDataModule):
             border=ds_cfg.chunk_border,
         )
 
-    # ------------- Lightning hooks -------------
-
     def setup(self, stage=None):
-        # TRAIN + VAL
         if stage == "fit" or stage is None:
-            # train
-            self.dataset_train = self._make_pt_dataset("train")
-            epochs_for_real_one = len(self.dataset_train) / self.config.n_step
-            print(f"[DataModule] it takes {epochs_for_real_one} pseudo-epochs (train) to see all data once")
+            full_dataset = self._make_pt_dataset("train")
+            
+            val_path = self.dataset_config.val.chunks_pt_root
+            train_path = self.dataset_config.train.chunks_pt_root
+            
+            if val_path and val_path != train_path:
+                print(f"[DataModule] Loading separate validation set from {val_path}")
+                self.train_dataset = full_dataset
+                self.val_dataset = self._make_pt_dataset("val")
+            else:
+                print(f"[DataModule] Splitting training set (95% train, 5% val).")
+                total_len = len(full_dataset)
+                val_len = int(total_len * 0.05)
+                train_len = total_len - val_len
+                
+                # Tutaj przypisujemy self.val_dataset
+                self.train_dataset, self.val_dataset = random_split(
+                    full_dataset, [train_len, val_len], 
+                    generator=torch.Generator().manual_seed(42)
+                )
 
-            # val
-            self.dataset_val = self._make_pt_dataset("val")
-            epochs_for_real_one_val = len(self.dataset_val) / self.config.val_n_step
-            print(f"[DataModule] it takes {epochs_for_real_one_val} pseudo-epochs (val) to see all data once")
-
-        # TEST / PREDICT
         if stage in ("test", "predict"):
             if self.test_full_frames:
-                # jeśli kiedyś będziesz chciał test na pełnych klatkach (PNG) – nadal zostawiam
-                self.dataset_test = FrameDataset(
+                self.test_dataset = FrameDataset(
                     settings=self.dataset_config.test,
                     chunk_transform=self.chunk_transform(),
                     metadata_transform=self.metadata_transform(),
                 )
             else:
-                # standardowo: test na chunkach .pt
-                self.dataset_test = self._make_pt_dataset("test")
-
-    # ------------- dataloadery -------------
+                self.test_dataset = self._make_pt_dataset("test")
 
     def train_dataloader(self):
-        return DataLoader(
-            self.dataset_train,
+        dl = DataLoader(
+            self.train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
-            num_workers=4,
-            pin_memory=False,
+            num_workers=8,  
+            pin_memory=True,
             collate_fn=custom_collate,
+            persistent_workers=True,
+            prefetch_factor=4
         )
+        return LoaderWrapper(dl, self.config.n_step)
 
     def val_dataloader(self):
         dl = DataLoader(
-            self.dataset_val,
+            self.val_dataset,  # <--- POPRAWKA: było self.dataset_val
             batch_size=self.config.val_batch_size,
             shuffle=False,
-            num_workers=4,
-            pin_memory=False,
+            num_workers=8,
+            pin_memory=True,
             collate_fn=custom_collate,
+            persistent_workers=True,
+            prefetch_factor=4
         )
         return LoaderWrapper(dl, self.config.val_n_step)
 
     def test_dataloader(self, shuffle: bool = False):
-        # Use custom_collate only for chunks_pt dataset, not for FrameDataset
         collate_fn = None if self.test_full_frames else custom_collate
-        
-        dl = DataLoader(
-            self.dataset_test,
+        return DataLoader(
+            self.test_dataset,
             batch_size=self.config.test_batch_size if not self.test_full_frames else 1,
             shuffle=shuffle,
             pin_memory=True,
-            num_workers=2,
+            num_workers=8,
             collate_fn=collate_fn,
+            prefetch_factor=4
         )
-        return dl
 
     def predict_dataloader(self):
         return self.test_dataloader(shuffle=True)
 
-    # ------------- transformy (używane tylko przez FrameDataset) -------------
-
     def chunk_transform(self):
-        # dla FrameDataset (PNG); VVCChunksPTDataset już zwraca tensory
-        transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-            ]
-        )
-        return transform
+        return transforms.Compose([transforms.ToTensor()])
 
     def metadata_transform(self):
         def transform(metadata):

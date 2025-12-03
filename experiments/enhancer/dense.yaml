@@ -1,20 +1,65 @@
-test_full_frames: true
+# experiments/enhancer/dense.yaml
+
+dataloader:
+  # Batch 32 jest bezpieczny dla RTX 5070 przy chunkach 132x132
+  batch_size: 8
+  val_batch_size: 8
+  test_batch_size: 8
+  
+  # Definicja długości epoki
+  n_step: 5000
+  val_n_step: 500
+  test_n_step: 500
+
+dataset:
+  train:
+    # Input (Zdekodowane + Cechy) - Dysk USB
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    
+    # Target (Oryginały) - Dysk NVMe/WSL
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    
+    chunk_height: 132
+    chunk_width: 132
+    chunk_border: 2
+
+  val:
+    # Walidacja na tych samych ścieżkach (DataModule losuje 5%)
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunk_height: 132
+    chunk_width: 132
+    chunk_border: 2
+
+  test:
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunk_height: 132
+    chunk_width: 132
+    chunk_border: 2
+
+# Ustawienia globalne
+test_full_frames: false
+
+# Konfiguracja Trenera
 trainer:
-  mode: enhancer
+  mode: enhancer  # Tryb Baseline (bez GAN)
   channels_grad_scales:
     - 0.66666
     - 0.66666
     - 0.66666
   enhancer:
     epochs: 1000
-    # enhancer_lr: 0.0002
     enhancer_scheduler_gamma: 0.5
     enhancer_scheduler_milestones: [50, 100, 150, 200, 300, 400, 500, 600, 800]
     saved_chunk_folder: enhanced/dense2
+
+# Architektura Sieci (DenseNet Baseline)
 enhancer:
   implementation: dense
   save_to: 'experiments/enhancer/dense2.pth'
   bn_size: 1.5
+  
   features:
     kernel_size: 9
     padding: 4
@@ -22,6 +67,7 @@ enhancer:
     features: 64
     pool: false
     dense: true
+
   structure:
     blocks:
       - kernel_size: 7
@@ -52,6 +98,7 @@ enhancer:
         padding: 1
         stride: 1
         features: 32
+  
   output_block:
     kernel_size: 3
     padding: 1
