@@ -4,7 +4,7 @@ dataloader:
   # Batch 32 jest bezpieczny dla RTX 5070 przy chunkach 132x132
   batch_size: 8
   val_batch_size: 8
-  test_batch_size: 8
+  test_batch_size: 1
   
   # Definicja długości epoki
   n_step: 5000
@@ -13,18 +13,13 @@ dataloader:
 
 dataset:
   train:
-    # Input (Zdekodowane + Cechy) - Dysk USB
     chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
-    
-    # Target (Oryginały) - Dysk NVMe/WSL
     orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
-    
     chunk_height: 132
     chunk_width: 132
     chunk_border: 2
 
   val:
-    # Walidacja na tych samych ścieżkach (DataModule losuje 5%)
     chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
     orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
     chunk_height: 132
@@ -32,14 +27,17 @@ dataset:
     chunk_border: 2
 
   test:
-    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
-    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    # Ścieżki do PEŁNYCH KLATEK .pt
+    chunks_pt_root: "videos_test/test_frames_pt"
+    orig_chunks_pt_root: "videos_test/test_orig_frames_pt"
+    
+    # Wymiary ignorowane przy test_full_frames=True, ale zostawiamy
     chunk_height: 132
     chunk_width: 132
     chunk_border: 2
 
 # Ustawienia globalne
-test_full_frames: false
+test_full_frames: true
 
 # Konfiguracja Trenera
 trainer:
@@ -58,6 +56,7 @@ trainer:
 enhancer:
   implementation: dense
   save_to: 'experiments/enhancer/dense2.pth'
+  load_from: "checkpoints/epoch=998.ckpt"
   bn_size: 1.5
   
   features:

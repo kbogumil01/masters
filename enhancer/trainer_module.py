@@ -334,17 +334,20 @@ class TrainerModule(pl.LightningModule):
 
     def _unpack_batch_for_eval(self, batch):
         """
-        Test/val/predict: batch może mieć:
-        - 5 elementów (chunks_pt z VVC features)
-        - 4 elementy (FrameDataset gdy test_full_frames=True)
+        Uniwersalne rozpakowywanie batcha.
+        Obsługuje:
+        - 5 elementów: (chunks, orig, meta, obj, features) -> Chunks PT
+        - 4 elementy: (chunks, orig, meta, obj) -> FullFrame (stary styl)
+        - 5 elementów: (chunks, orig, meta, obj, features) -> FullFrame PT (nowy styl)
         """
-        if self.test_full_frames:
-            # FrameDataset: (chunks, orig_chunks, metadata, chunk_objs)
+        if len(batch) == 5:
+            chunks, orig_chunks, metadata, chunk_objs, vvc_features = batch
+        elif len(batch) == 4:
             chunks, orig_chunks, metadata, chunk_objs = batch
             vvc_features = None
         else:
-            # VVCChunksPTDataset: (chunks, orig_chunks, metadata, chunk_objs, vvc_features)
-            chunks, orig_chunks, metadata, chunk_objs, vvc_features = batch
+            raise ValueError(f"Unexpected batch size: {len(batch)}")
+            
         return chunks, orig_chunks, metadata, chunk_objs, vvc_features
 
     def validation_step(self, batch, batch_idx):
