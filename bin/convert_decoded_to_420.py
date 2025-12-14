@@ -1,6 +1,6 @@
 import os
 import sys
-from utils.read_medatada import read_movie_metadata
+from utils.read_metadata import read_movie_metadata
 
 ROOT = "test_decoded"
 

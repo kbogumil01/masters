@@ -1,0 +1,88 @@
+# experiments/enhancer/dense_highQP.yaml
+
+dataloader:
+  batch_size: 8
+  val_batch_size: 8
+  test_batch_size: 1
+  n_step: 5000
+  val_n_step: 500
+  test_n_step: 500
+
+dataset:
+  train:
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunk_height: 132
+    chunk_width: 132
+    chunk_border: 2
+  val:
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunk_height: 132
+    chunk_width: 132
+    chunk_border: 2
+  test:
+    chunks_pt_root: "videos_test/test_frames_pt"
+    orig_chunks_pt_root: "videos_test/test_orig_frames_pt"
+    chunk_height: 132
+    chunk_width: 132
+    chunk_border: 2
+
+test_full_frames: true
+
+trainer:
+  mode: enhancer
+  channels_grad_scales: [0.66666, 0.66666, 0.66666]
+  enhancer:
+    epochs: 1000
+    enhancer_scheduler_gamma: 0.5
+    enhancer_scheduler_milestones: [50, 100, 150, 200, 300, 400, 500, 600, 800]
+    # Zapisujemy w nowym folderze
+    saved_chunk_folder: enhanced/dense_highQP
+
+enhancer:
+  implementation: dense
+  # Zapisujemy nowy model
+  save_to: 'experiments/enhancer/dense_highQP.pth'
+  # Startujemy od zera (load_from: null)
+  load_from: null 
+  bn_size: 1.5
+  features:
+    kernel_size: 9
+    padding: 4
+    stride: 1
+    features: 64
+    pool: false
+    dense: true
+  structure:
+    blocks:
+      - kernel_size: 7
+        padding: 3
+        stride: 1
+        features: 64
+        transition: {mode: same}
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        features: 96
+        transition: {mode: same}
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 64
+        transition: {mode: same}
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 48
+        transition: {mode: same}
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        features: 32
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    features: 3
+    tanh: false
