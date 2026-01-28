@@ -74,6 +74,13 @@ if __name__ == "__main__":
         default=None,
         help="Path to checkpoint file for testing/prediction"
     )
+    
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint file to resume training from"
+    )
 
     args = parser.parse_args()
 
@@ -116,10 +123,16 @@ if __name__ == "__main__":
         discriminator,
         test_full_frames=config.test_full_frames,
     )
-
-    # wandb_logger = WandbLogger(
-    #     project="vvc-enhancer",
-    # )
+    run_name = "TEST_Run" if args.test else "TRAIN_Run"
+    if args.ckpt_path:
+        # Dodajemy nazwę pliku checkpointu do nazwy runu dla porządku
+        ckpt_name = args.ckpt_path.split("/")[-1]
+        run_name += f"_{ckpt_name}"
+        
+    wandb_logger = WandbLogger(
+         project="vvc-enhancer",
+         name=run_name
+    )
 
     trainer = Trainer(
         accelerator="auto",
@@ -134,11 +147,11 @@ if __name__ == "__main__":
             LearningRateMonitor(logging_interval="step"),
             ModelCheckpoint(dirpath="checkpoints", filename="{epoch}"),
         ],
-        # logger=wandb_logger,
+        logger=wandb_logger,
     )
 
     if args.train:
-        trainer.fit(module, data_module)
+        trainer.fit(module, data_module, ckpt_path=args.resume)
 
     if config.enhancer.save_to and args.train:
         torch.save(enhancer.state_dict(), config.enhancer.save_to)

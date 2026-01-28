@@ -1,0 +1,87 @@
+# Poprawiona Konfiguracja dla Architektury DenseNet (Zgodna z Tabelą 5.2 Pracy)
+dataloader:
+  n_step: 8000 # Zwiększona liczba kroków, aby skompensować mniejszy batch size (64 -> 8)
+  batch_size: 8 # Praca specyfikuje batch size 8 dla stabilności GAN
+  val_batch_size: 8
+  test_batch_size: 1
+
+dataset:
+  train:
+    chunks_root: /mnt/d/data_mgr/chunks_pt # Zweryfikuj ścieżkę
+    orig_root: /home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt # Zweryfikuj ścieżkę
+  test:
+    chunks_root: videos_test/test_frames_REAL
+    orig_root: videos_test/test_orig_frames_pt
+    test_full_frames: true
+
+trainer:
+  mode: enhancer # Rozpocznij od 'enhancer' (Faza 1), potem przełącz na 'gan' (Faza 2)
+  enhancer:
+    epochs: 100 # Faza 1 trwa 100 epok, Faza 2 trwa 900 epok
+    optimizer: adam
+    lr: 0.0001
+  discriminator:
+    optimizer: sgd
+    lr: 0.001
+  # Ważne: Skale gradientów kanałów (Y jest najważniejszy)
+  channels_grad_scales: [0.8, 0.1, 0.1] 
+
+network:
+  input_shape: 
+  bn_size: 1.5 # Praca specyfikuje 1.5 dla bottleneck
+  activation: prelu
+  
+  structure:
+    blocks:
+      # Blok 1 (Blok wejściowy w Tabeli 5.2 Pracy)
+      - kernel_size: 9
+        features: 64
+        padding: 4 # (k-1)/2
+        num_layers: 1 # D1 w Pracy
+      
+      # Blok 2 (D2 w Pracy)
+      - kernel_size: 7
+        features: 16 # Growth rate
+        padding: 3
+        num_layers: 4 # 4 warstwy
+        transition: # Warstwa przejściowa po bloku
+          kernel_size: 1
+          mode: same # Transition redukuje wymiarowość (liczbę kanałów)
+
+      # Blok 3 (D3 w Pracy)
+      - kernel_size: 5
+        features: 16
+        padding: 2
+        num_layers: 6
+        transition:
+          kernel_size: 1
+          mode: same
+
+      # Blok 4 (D4 w Pracy)
+      - kernel_size: 3
+        features: 16
+        padding: 1
+        num_layers: 4
+        transition:
+          kernel_size: 1
+          mode: same
+
+      # Blok 5 (D5 w Pracy)
+      - kernel_size: 3
+        features: 16
+        padding: 1
+        num_layers: 3
+        transition:
+          kernel_size: 1
+          mode: same
+
+      # Blok 6 (D6 w Pracy)
+      - kernel_size: 3
+        features: 16
+        padding: 1
+        num_layers: 2
+
+  output_block:
+    kernel_size: 3
+    features: 3 # Wyjście RGB/YUV
+    tanh: false # Wyjście to surowe wartości pikseli lub rezyduum

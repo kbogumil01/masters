@@ -1,11 +1,15 @@
 # experiments/enhancer/dense_highQP.yaml
 
 dataloader:
-  batch_size: 8
-  val_batch_size: 8
-  test_batch_size: 1
-  n_step: 5000
-  val_n_step: 500
+  batch_size: 64        # Skok z 8 na 64. Karta wreszcie się spoci.
+  val_batch_size: 64    # Walidacja przeleci błyskawicznie.
+  test_batch_size: 1    # Bez zmian.
+  
+  n_step: 1000          # Mniej kroków, ale DUŻO więcej danych (64 * 1000 = 64,000 chunków/epokę).
+                        # Wcześniej miałeś 8 * 5000 = 40,000.
+                        # Czyli: epoka "większa" o 50%, a policzy się 5x szybciej.
+  
+  val_n_step: 100       # 100 * 64 = 6400 próbek walidacyjnych. Wystarczy w zupełności.
   test_n_step: 500
 
 dataset:
@@ -22,7 +26,7 @@ dataset:
     chunk_width: 132
     chunk_border: 2
   test:
-    chunks_pt_root: "videos_test/test_frames_pt"
+    chunks_pt_root: "videos_test/test_frames_REAL"
     orig_chunks_pt_root: "videos_test/test_orig_frames_pt"
     chunk_height: 132
     chunk_width: 132
@@ -42,6 +46,7 @@ trainer:
 
 enhancer:
   implementation: dense
+  use_vvc_features: false
   # Zapisujemy nowy model
   save_to: 'experiments/enhancer/dense_highQP.pth'
   # Startujemy od zera (load_from: null)

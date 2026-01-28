@@ -37,7 +37,7 @@ class Enhancer(nn.Module):
         )
 
         # BASELINE: 3 (RGB) + metadata_features (4)
-        num_features = config.metadata_features + config.input_shape[2]
+        num_features = config.input_shape[2] + config.metadata_size
 
         # TODO: Odkomentuj dla Eksperymentu 2 i 3
         # if getattr(config, "use_vvc_features", False):

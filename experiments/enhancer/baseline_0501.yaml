@@ -1,0 +1,172 @@
+# experiments/enhancer/baseline_0501.yaml
+# Konfiguracja 1:1 z repo Piotra (dense.yaml)
+# Data: 2026-01-05
+
+dataloader:
+  batch_size: 16
+  val_batch_size: 16
+  test_batch_size: 1
+  n_step: 4000
+  val_n_step: 400
+  test_n_step: 500
+
+dataset:
+  train:
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunk_width: 132
+    chunk_height: 132
+    chunk_border: 2
+
+  val:
+    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunk_width: 132
+    chunk_height: 132
+    chunk_border: 2
+
+  test:
+    chunks_pt_root: "videos_test/test_frames_REAL"
+    orig_chunks_pt_root: "videos_test/test_orig_frames_pt"
+    chunk_width: 132
+    chunk_height: 132
+    chunk_border: 2
+
+test_full_frames: true
+
+trainer:
+  mode: enhancer
+  separation_epochs: 10
+
+  # Piotr: równe wagi dla Y, U, V
+  channels_grad_scales: [0.66666, 0.66666, 0.66666]
+
+  enhancer:
+    epochs: 1000
+    enhancer_lr: 0.0001
+    betas: [0.5, 0.999]
+
+    discriminator_lr: 0.0001
+    momentum: 0.9
+
+    num_samples: 6
+    probe: 10
+    enhancer_min_loss: 0.35
+    discriminator_min_loss: 0.20
+
+    enhancer_scheduler: true
+    enhancer_scheduler_gamma: 0.5
+    # ReduceLROnPlateau: patience=10, min_lr=1e-6 (hardcoded in trainer_module.py)
+
+    discriminator_scheduler: false
+    saved_chunk_folder: "enhanced/baseline_0501"
+
+enhancer:
+  implementation: dense
+  reflect_padding: true
+  activation: "prelu"
+
+  # Piotr: bn_size=1.5
+  bn_size: 1.5
+
+  metadata_size: 6
+  metadata_features: 6
+
+  with_mask: true
+
+  input_shape: [132, 132, 3]
+  load_from: null
+  save_to: "experiments/enhancer/baseline_0501.pth"
+
+  # D1: 9x9, 64 filtrów, dense=true (konkatenacja z inputem)
+  features:
+    kernel_size: 9
+    padding: 4
+    stride: 1
+    num_layers: 1
+    features: 64
+    dropout: 0.0
+    transition: null
+    dense: true
+    res: false
+    pool: false
+
+  # D2-D6: DenseBlocki z num_layers=1, różne growth_rate
+  structure:
+    blocks:
+      # D2: 7x7, growth_rate=64, 1 warstwa
+      - kernel_size: 7
+        padding: 3
+        stride: 1
+        num_layers: 1
+        features: 64
+        dropout: 0.0
+        transition:
+          kernel_size: 1
+          padding: 0
+          stride: 1
+          mode: same
+
+      # D3: 5x5, growth_rate=96, 1 warstwa
+      - kernel_size: 5
+        padding: 2
+        stride: 1
+        num_layers: 1
+        features: 96
+        dropout: 0.0
+        transition:
+          kernel_size: 1
+          padding: 0
+          stride: 1
+          mode: same
+
+      # D4: 3x3, growth_rate=64, 1 warstwa
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        num_layers: 1
+        features: 64
+        dropout: 0.0
+        transition:
+          kernel_size: 1
+          padding: 0
+          stride: 1
+          mode: same
+
+      # D5: 3x3, growth_rate=48, 1 warstwa
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        num_layers: 1
+        features: 48
+        dropout: 0.0
+        transition:
+          kernel_size: 1
+          padding: 0
+          stride: 1
+          mode: same
+
+      # D6: 3x3, growth_rate=32, 1 warstwa, bez transition
+      - kernel_size: 3
+        padding: 1
+        stride: 1
+        num_layers: 1
+        features: 32
+        dropout: 0.0
+        transition: null
+
+  # C7: 3x3 -> 3 kanały wyjściowe
+  output_block:
+    kernel_size: 3
+    padding: 1
+    stride: 1
+    num_layers: 1
+    features: 3
+    dropout: 0.0
+    transition: null
+    tanh: false
+
+# Wymagane przez Config(), ale w mode=enhancer nie używane
+discriminator:
+  implementation: conv
+  input_shape: [132, 132, 3]
