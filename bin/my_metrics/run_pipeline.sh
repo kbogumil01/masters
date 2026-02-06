@@ -28,15 +28,15 @@ echo "Config: $CONFIG"
 echo ""
 
 # Directories
-INPUT_DIR="videos_test/test_frames_REAL"
-ORIG_DIR="videos_test/test_dataset"
-ENCODER_LOGS="videos_test/encoded_test"
+INPUT_DIR="data/videos_test/test_frames_REAL"
+ORIG_DIR="data/videos_test/test_dataset"
+ENCODER_LOGS="data/videos_test/encoded_test"
 
-ENHANCED_PT="videos_test/enhanced_pt"
-ENHANCED_YUV444="videos_test/enhanced_yuv444"
-ENHANCED_YUV420="videos_test/enhanced_yuv420"
-DECODED_YUV420="videos_test/decoded_yuv420"
-METRICS_DIR="videos_test/metrics"
+ENHANCED_PT="data/videos_test/enhanced_pt"
+ENHANCED_YUV444="data/videos_test/enhanced_yuv444"
+ENHANCED_YUV420="data/videos_test/enhanced_yuv420"
+DECODED_YUV420="data/videos_test/decoded_yuv420"
+METRICS_DIR="data/videos_test/metrics"
 OUTPUT_REPORT="results/bd_report.csv"
 
 echo "Step 1/6: Running inference on test frames..."

@@ -9,25 +9,25 @@ dataloader:
   n_step: 4000
   val_n_step: 400
   test_n_step: 500
-
+# wszystko jest już w DATA!
 dataset:
   train:
-    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
-    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunks_pt_root: "/home/karol/mgr/new_PC/data/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/data/chunks_dataset/orig_chunks_pt"
     chunk_width: 132
     chunk_height: 132
     chunk_border: 2
 
   val:
-    chunks_pt_root: "/mnt/d/data_mgr/chunks_pt"
-    orig_chunks_pt_root: "/home/karol/mgr/new_PC/chunks_dataset/orig_chunks_pt"
+    chunks_pt_root: "/home/karol/mgr/new_PC/data/chunks_pt"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/data/chunks_dataset/orig_chunks_pt"
     chunk_width: 132
     chunk_height: 132
     chunk_border: 2
 
   test:
-    chunks_pt_root: "videos_test/test_frames_REAL"
-    orig_chunks_pt_root: "videos_test/test_orig_frames_pt"
+    chunks_pt_root: "/home/karol/mgr/new_PC/data/videos_test/test_frames_REAL"
+    orig_chunks_pt_root: "/home/karol/mgr/new_PC/data/videos_test/test_orig_frames_pt"
     chunk_width: 132
     chunk_height: 132
     chunk_border: 2

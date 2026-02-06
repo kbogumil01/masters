@@ -168,7 +168,6 @@ def collect_rd_points(metrics_dir: Path, encoder_logs_dir: Path):
         
         # Get metrics
         psnr = parse_ffmpeg_psnr_log(psnr_file)
-        ssim_file = psnr_file.parent / name.replace("_psnr", "_ssim") + ".info"
         ssim_file = psnr_file.parent / (name.replace("_psnr", "_ssim") + ".info")
         ssim = parse_ffmpeg_ssim_log(ssim_file)
         

@@ -29,7 +29,7 @@ videos/orig_frames/
 videos/chunks/
 videos/orig_chunks/
 enhanced/
-
+data/
 # Build artifacts
 build/
 dist/
@@ -85,3 +85,6 @@ data/
 videos/
 videos_test/
 wandb/
+
+checkpoints/
+old_checkpoints/
